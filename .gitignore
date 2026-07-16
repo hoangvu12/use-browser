@@ -1,0 +1,10 @@
+# build output
+/use-browser
+/use-browser.exe
+/bu
+/bu.exe
+/dist/
+
+# editor / OS
+.DS_Store
+*.swp
