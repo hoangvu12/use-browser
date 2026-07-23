@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -110,7 +111,10 @@ func browserWSURL() (string, error) {
 		if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
 			return ws, nil
 		}
-		if wsPath != "" {
+		// The ws-path fallback (chrome://inspect toggle mode) only counts if
+		// something is actually listening; a DevToolsActivePort file left
+		// behind by a closed browser is stale and must not fake a connection.
+		if wsPath != "" && portAlive(port) {
 			return "ws://127.0.0.1:" + port + wsPath, nil
 		}
 	}
@@ -126,6 +130,16 @@ func browserWSURL() (string, error) {
 func connected() bool {
 	_, err := browserWSURL()
 	return err == nil
+}
+
+// portAlive reports whether something is listening on a local TCP port.
+func portAlive(port string) bool {
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 400*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // ---- JSON-RPC over the browser WebSocket ----
