@@ -7,10 +7,11 @@ description: Controls a real Chrome browser from the command line for web automa
 
 Single-binary CLI that drives any Chromium-family browser (Chrome, Brave, Edge, Chromium, Vivaldi, Opera) over the DevTools protocol. It needs a browser serving remote debugging on 127.0.0.1:9222; `BU_CDP_URL` points at any other DevTools endpoint.
 
-If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the two ways to connect:
+If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the three ways to connect:
 
-- `use-browser connect [browser]` attaches to the user's normal browser with their real profile and logins. It opens the browser's inspect page and waits; the user must enable "Allow remote debugging for this browser instance" themselves. Tell them to click it, and never flip security toggles on their behalf.
-- `use-browser launch [chrome|brave|edge|...]` starts a detected browser with a dedicated automation profile, isolated from the user's own browsing. Logins made in it persist between runs.
+- `use-browser clone [browser]` copies the user's real profile (cookies, logins) into a non-default directory and launches the browser against the copy with flag-based remote debugging. No toggle, no popup, but real logins — the Chromium 136 restriction only applies to the default profile path. `--profile "Profile 1"` picks a profile; `--fresh` re-copies. Tell the user to close the source browser first for a complete copy. The real profile is only read, never launched with debugging.
+- `use-browser connect [browser]` attaches to the user's already-running browser with their real profile. It opens the browser's inspect page and waits; the user must enable "Allow remote debugging for this browser instance" themselves. Tell them to click it, and never flip security toggles on their behalf.
+- `use-browser launch [chrome|brave|edge|...]` starts a detected browser with a dedicated empty automation profile, isolated from the user's own browsing. Logins made in it persist between runs.
 
 If `use-browser` is not on PATH, install it first:
 
@@ -64,7 +65,8 @@ use-browser open [url]             new tab
 use-browser close                  close current tab
 use-browser js <expr>              run JavaScript in the page
 use-browser cdp <Domain.method> [params-json]   raw DevTools call
-use-browser connect [browser]      attach to the user's normal browser (real profile)
+use-browser connect [browser]      attach to the user's running browser (real profile, toggle)
+use-browser clone [browser]        copy real profile & launch it debuggable (logins, no toggle)
 use-browser launch [browser]       start a browser with a dedicated automation profile
 use-browser doctor                 list installed browsers, diagnose the connection
 ```

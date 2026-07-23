@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
@@ -42,8 +42,11 @@ Batch (one invocation, one connection):
 
 Setup:
   use-browser connect [browser]   attach to your normal browser, real profile (one-time toggle)
+  use-browser clone [browser]     copy your real profile & launch it debuggable (logins, no toggle)
   use-browser launch [browser]    start a browser with a dedicated automation profile
   use-browser doctor              list installed browsers, diagnose the connection
+
+clone options: --profile "Profile 1"  pick which profile to copy | --fresh  re-copy | --port N
 
 Works with any Chromium-family browser (Chrome, Brave, Edge, Chromium, Vivaldi, Opera).
 Remote endpoint: set BU_CDP_URL=http://host:port.
@@ -86,6 +89,12 @@ func main() {
 		return
 	case "launch":
 		if err := cmdLaunch(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "clone":
+		if err := cmdClone(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

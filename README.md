@@ -30,23 +30,31 @@ If you'd rather build from source, `go build -o use-browser .` with Go 1.24 or n
 
 ## Connect a browser
 
-`use-browser doctor` lists the browsers it found and how to connect. There are two ways, because Chromium 136 [stopped honoring](https://developer.chrome.com/blog/remote-debugging-port) `--remote-debugging-port` on a browser's default profile:
+`use-browser doctor` lists the browsers it found and how to connect. There are three ways, because Chromium 136 [stopped honoring](https://developer.chrome.com/blog/remote-debugging-port) `--remote-debugging-port` on a browser's default profile:
 
-To use your normal browser with your real profile and logins:
+**Your real profile, no toggle** — clone it and drive the copy:
+
+```
+use-browser clone brave
+```
+
+This copies your real profile (cookies, logins) into a non-default directory next to the CLI's state, then launches the browser against the copy with `--remote-debugging-port` baked in. Because the copy lives at a non-default path, Chromium 136 allows flag-based debugging there — so you get your logins with no `chrome://inspect` toggle and no popup. This is the same fallback [browser-use uses](https://github.com/browser-use/browser-use/issues/1520). Pick a specific profile with `--profile "Profile 1"`, and refresh the copy from your real profile with `--fresh`. Close the source browser first for a complete copy (a running browser can hold cookie files locked). Your day-to-day browser is only read, never launched with debugging.
+
+**Your real profile, with a toggle** — attach to the browser you're already running:
 
 ```
 use-browser connect
 ```
 
-This opens `chrome://inspect/#remote-debugging` (`brave://inspect/#remote-debugging` in Brave, and so on) in whichever browser you're running, and waits while you enable "Allow remote debugging for this browser instance". One toggle, once. This is the same flow browser-use walks you through; nothing gets around the restriction, since the whole point is that a human has to approve it.
+This opens `chrome://inspect/#remote-debugging` (`brave://inspect/#remote-debugging` in Brave, and so on) in whichever browser you're running, and waits while you enable "Allow remote debugging for this browser instance". One toggle, once. Nothing gets around the restriction here, since the whole point is that a human has to approve it in the live profile.
 
-Or keep automation separate:
+**A clean, separate profile** — keep automation isolated:
 
 ```
 use-browser launch brave
 ```
 
-This starts the browser you name (or the first one detected) with a dedicated profile stored next to the CLI's state. Logins you make there stick around for future runs, and your day-to-day browser never sees any of it.
+This starts the browser you name (or the first one detected) with a dedicated empty profile stored next to the CLI's state. Logins you make there stick around for future runs, and your day-to-day browser never sees any of it.
 
 `BU_CDP_URL` points the CLI at any other DevTools endpoint, including a remote or cloud browser.
 

@@ -228,12 +228,16 @@ func connectHelp() string {
 		return "no Chromium-family browser detected; install Chrome, Brave, or Edge"
 	}
 	b := pickBrowser()
-	s := fmt.Sprintf(`To attach to your normal %s (real profile, logins intact):
-  run: use-browser connect %s
+	s := fmt.Sprintf(`To use your real %s profile (logins intact) with no toggle:
+  run: use-browser clone %s
+  (copies your profile to a non-default dir, then launches it debuggable)
+
+Or attach to your already-running %s via a one-time toggle:
+  use-browser connect %s
   (opens %s; enable "Allow remote debugging for this browser instance")
 
-Or start a separate instance with a dedicated automation profile:
-  use-browser launch %s`, b.Name, b.Name, b.inspectURL(), b.Name)
+Or start a separate instance with a dedicated empty profile:
+  use-browser launch %s`, b.Name, b.Name, b.Name, b.Name, b.inspectURL(), b.Name)
 	if len(found) > 1 {
 		s += "\nDetected browsers:"
 		for _, f := range found {
