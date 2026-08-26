@@ -32,6 +32,21 @@ If you'd rather build from source, `go build -o use-browser .` with Go 1.24 or n
 
 `use-browser doctor` lists the browsers it found and how to connect. There are three ways, because Chromium 136 [stopped honoring](https://developer.chrome.com/blog/remote-debugging-port) `--remote-debugging-port` on a browser's default profile:
 
+Pin the browser before connecting whenever more than one Chromium-family
+browser is installed or running:
+
+```
+use-browser use chrome
+use-browser launch chrome
+use-browser doctor chrome
+```
+
+The pin scopes endpoint and profile discovery to Chrome, so an existing Brave
+debugging endpoint cannot be selected accidentally. `doctor` should mark Chrome
+`<- pinned`; `use-browser use auto` clears the pin. If a source checkout's
+rebuilt binary supports `use` but the PATH-installed binary does not, use the
+rebuilt binary or update the installation before connecting.
+
 **Your real profile, no toggle** — clone it and drive the copy:
 
 ```
@@ -90,7 +105,8 @@ use-browser shot [path] [--full]          screenshot PNG, prints the file path
 use-browser tabs / tab <n> / open [url] / close
 use-browser js <expr>                     run JavaScript in the page (js - reads stdin)
 use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
-use-browser doctor | skill | help
+use-browser use [browser]                 pin browser selection (`auto` clears it)
+use-browser doctor [browser] | skill | help
 ```
 
 Multi-step flows go through batch mode, which runs command lines from stdin over a single connection:

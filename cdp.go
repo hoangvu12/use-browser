@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,6 +101,14 @@ func browserWSURL() (string, error) {
 		}
 		return "", fmt.Errorf("BU_CDP_URL=%s did not return a webSocketDebuggerUrl", v)
 	}
+	// The port we launched the pinned browser on. Chrome sometimes serves
+	// DevTools without ever writing a DevToolsActivePort file, so this is
+	// checked before the directory scan.
+	if p := loadState().Port; p != 0 {
+		if ws := versionWS("http://127.0.0.1:" + strconv.Itoa(p)); ws != "" {
+			return ws, nil
+		}
+	}
 	// Scan profile directories for an active debugging port. Prefer the
 	// HTTP endpoint (gives a live WS URL); fall back to the file's ws path,
 	// which is what the chrome://inspect toggle leaves behind.
@@ -118,8 +127,14 @@ func browserWSURL() (string, error) {
 			return "ws://127.0.0.1:" + port + wsPath, nil
 		}
 	}
-	// Last resort: probe the common ports directly.
-	for _, port := range []string{"9222", "9223"} {
+	// Last resort: probe the common ports directly. With a browser pinned the
+	// listener could belong to a different one (a Brave you left open), so
+	// the port has to be owned by the pinned browser's process to count.
+	pin := pinnedBrowser()
+	for _, port := range []string{"9222", "9223", "9224"} {
+		if pin != "" && !portOwnedBy(port, pin) {
+			continue
+		}
 		if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
 			return ws, nil
 		}
@@ -313,7 +328,7 @@ func connect() (*cdpClient, error) {
 		return nil, err
 	}
 	if st.Target != chosen.TargetID {
-		saveState(buState{Target: chosen.TargetID})
+		saveTarget(chosen.TargetID)
 	}
 	return c, nil
 }
@@ -395,6 +410,13 @@ func (c *cdpClient) waitReady(timeout time.Duration) {
 
 type buState struct {
 	Target string `json:"target"`
+	// Browser pins every command to one browser (see: use-browser use).
+	// Empty means "whichever is running", the old behaviour.
+	Browser string `json:"browser,omitempty"`
+	// Port is the debug port we last launched the pinned browser on. Chrome
+	// does not always write a DevToolsActivePort file, so remembering the
+	// port we chose is the only reliable way back to that instance.
+	Port int `json:"port,omitempty"`
 }
 
 func stateFile() string {
@@ -419,4 +441,18 @@ func saveState(st buState) {
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	b, _ := json.Marshal(st)
 	os.WriteFile(p, b, 0o644)
+}
+
+// saveTarget updates the current tab without clobbering the pinned browser.
+func saveTarget(id string) {
+	st := loadState()
+	st.Target = id
+	saveState(st)
+}
+
+// savePort remembers the debug port we launched the pinned browser on.
+func savePort(port int) {
+	st := loadState()
+	st.Port = port
+	saveState(st)
 }

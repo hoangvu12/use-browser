@@ -18,7 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,40 +26,7 @@ import (
 // realUserDataDir returns the user-data-dir of a browser's normal install,
 // i.e. the directory that holds "Local State" and the profile subdirectories.
 func realUserDataDir(name string) string {
-	home, _ := os.UserHomeDir()
-	local := os.Getenv("LOCALAPPDATA")
-	appdata := os.Getenv("APPDATA")
-	switch runtime.GOOS {
-	case "windows":
-		return map[string]string{
-			"chrome":   filepath.Join(local, `Google\Chrome\User Data`),
-			"brave":    filepath.Join(local, `BraveSoftware\Brave-Browser\User Data`),
-			"edge":     filepath.Join(local, `Microsoft\Edge\User Data`),
-			"chromium": filepath.Join(local, `Chromium\User Data`),
-			"vivaldi":  filepath.Join(local, `Vivaldi\User Data`),
-			"opera":    filepath.Join(appdata, `Opera Software\Opera Stable`),
-		}[name]
-	case "darwin":
-		s := filepath.Join(home, "Library", "Application Support")
-		return map[string]string{
-			"chrome":   filepath.Join(s, "Google", "Chrome"),
-			"brave":    filepath.Join(s, "BraveSoftware", "Brave-Browser"),
-			"edge":     filepath.Join(s, "Microsoft Edge"),
-			"chromium": filepath.Join(s, "Chromium"),
-			"vivaldi":  filepath.Join(s, "Vivaldi"),
-			"opera":    filepath.Join(s, "com.operasoftware.Opera"),
-		}[name]
-	default:
-		cfg := filepath.Join(home, ".config")
-		return map[string]string{
-			"chrome":   filepath.Join(cfg, "google-chrome"),
-			"brave":    filepath.Join(cfg, "BraveSoftware", "Brave-Browser"),
-			"edge":     filepath.Join(cfg, "microsoft-edge"),
-			"chromium": filepath.Join(cfg, "chromium"),
-			"vivaldi":  filepath.Join(cfg, "vivaldi"),
-			"opera":    filepath.Join(cfg, "opera"),
-		}[name]
-	}
+	return userDataDirs()[name]
 }
 
 // listProfiles returns the profile subdirectory names inside a user-data-dir
@@ -139,7 +106,7 @@ func copyFile(src, dst string) error {
 func cmdClone(args []string) error {
 	name := ""
 	profileDir := "Default"
-	port := "9222"
+	port := "" // empty: pick the first free port at launch time
 	fresh := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -162,14 +129,20 @@ func cmdClone(args []string) error {
 		}
 	}
 
-	if connected() {
-		fmt.Println("ok already connected (use-browser doctor for details)")
-		return nil
-	}
-
 	b, err := findBrowser(name)
 	if err != nil {
 		return err
+	}
+	pinBrowser(b.Name)
+	if port == "" {
+		port = strconv.Itoa(freeDebugPort())
+	}
+	if n, err := strconv.Atoi(port); err == nil {
+		savePort(n)
+	}
+	if connected() {
+		fmt.Printf("ok already connected to %s (use-browser doctor for details)\n", b.Name)
+		return nil
 	}
 
 	src := realUserDataDir(b.Name)

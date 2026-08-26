@@ -41,15 +41,19 @@ Batch (one invocation, one connection):
   EOF
 
 Setup:
+  use-browser use [browser]       pin which browser to drive (auto = unpin)
   use-browser connect [browser]   attach to your normal browser, real profile (one-time toggle)
   use-browser clone [browser]     copy your real profile & launch it debuggable (logins, no toggle)
   use-browser launch [browser]    start a browser with a dedicated automation profile
-  use-browser doctor              list installed browsers, diagnose the connection
+  use-browser doctor [browser]    list installed browsers, diagnose the connection
 
 clone options: --profile "Profile 1"  pick which profile to copy | --fresh  re-copy | --port N
 
 Works with any Chromium-family browser (Chrome, Brave, Edge, Chromium, Vivaldi, Opera).
-Remote endpoint: set BU_CDP_URL=http://host:port.
+Without a pin, whichever Chromium is already running wins. Pin one to keep the
+rest out of it — e.g. drive Chrome while Brave stays open and untouched:
+  use-browser use chrome && use-browser clone chrome
+Per-command override: BU_BROWSER=chrome. Remote endpoint: BU_CDP_URL=http://host:port.
 
 Other: use-browser skill | use-browser version`
 
@@ -84,6 +88,12 @@ func main() {
 		return
 	case "doctor":
 		if err := cmdDoctor(args[1:]); err != nil {
+			os.Exit(1)
+		}
+		return
+	case "use":
+		if err := cmdUse(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return

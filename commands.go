@@ -57,7 +57,7 @@ func cmdOpen(c *cdpClient, args []string) error {
 	if err != nil {
 		return err
 	}
-	saveState(buState{Target: id})
+	saveTarget(id)
 	if err := c.attach(id); err != nil {
 		fmt.Printf("ok tab %s\n", id[:8])
 		return nil
@@ -116,7 +116,7 @@ func cmdTab(c *cdpClient, args []string) error {
 		return fmt.Errorf("tab %d out of range (1-%d)", n, len(pages))
 	}
 	t := pages[n-1]
-	saveState(buState{Target: t.TargetID})
+	saveTarget(t.TargetID)
 	if err := c.attach(t.TargetID); err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func cmdClose(c *cdpClient, _ []string) error {
 	if _, err := c.browserCall("Target.closeTarget", map[string]any{"targetId": c.targetID}); err != nil {
 		return err
 	}
-	saveState(buState{})
+	saveTarget("")
 	fmt.Println("ok")
 	return nil
 }
@@ -405,13 +405,31 @@ func cmdCDP(c *cdpClient, args []string) error {
 	return nil
 }
 
-func cmdDoctor(_ []string) error {
+func cmdDoctor(args []string) error {
+	// `doctor <browser>` diagnoses that browser specifically, and pins it.
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		b, err := findBrowser(strings.ToLower(args[0]))
+		if err != nil {
+			return err
+		}
+		pinBrowser(b.Name)
+	}
+	pin := pinnedBrowser()
 	for _, b := range detectBrowsers() {
 		run := ""
 		if b.isRunning() {
 			run = " [running]"
 		}
-		fmt.Printf("installed: %s (%s)%s\n", b.Name, b.Path, run)
+		mark := ""
+		if b.Name == pin {
+			mark = " <- pinned"
+		}
+		fmt.Printf("installed: %s (%s)%s%s\n", b.Name, b.Path, run, mark)
+	}
+	if pin == "" {
+		fmt.Println("pinned: none (auto — first running browser wins; use-browser use <name> to pin)")
+	} else if os.Getenv("BU_BROWSER") != "" {
+		fmt.Printf("pinned: %s (from BU_BROWSER)\n", pin)
 	}
 	wsURL, err := browserWSURL()
 	if err != nil {
