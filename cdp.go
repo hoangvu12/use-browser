@@ -426,13 +426,22 @@ func (c *cdpClient) newPage(url string) (string, error) {
 
 // connect dials the browser WS and attaches to the current or first page.
 func connect() (*cdpClient, error) {
-	wsURL, err := browserWSURL()
+	e, err := discover()
 	if err != nil {
 		return nil, err
 	}
-	// In chrome://inspect toggle mode the browser shows a one-time "Allow"
-	// popup when a debugger first connects and holds the handshake until the
-	// user accepts, so allow generous time for that click.
+	wsURL := e.ws
+	// Toggle mode prompts the user on every connection, and this dial is
+	// about to raise that dialog. Say so first: a dialog nobody expected,
+	// on the browser they are actually using, is not acceptable surprise.
+	if e.mode == "toggle" {
+		fmt.Fprintf(os.Stderr, "note: connecting to your real %s through its inspect toggle.%s"+
+			"      it will ask you to allow this connection, and will ask again next time.%s"+
+			"      to stop that: use-browser clone %s   (same logins, no prompt)%s",
+			e.browser, "\n", "\n", e.browser, "\n")
+	}
+	// The browser holds the handshake open until the user answers that
+	// dialog, so allow generous time for the click.
 	dialTimeout := 8 * time.Second
 	if os.Getenv("BU_CDP_WS") == "" && os.Getenv("BU_CDP_URL") == "" {
 		dialTimeout = 60 * time.Second
