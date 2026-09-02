@@ -157,7 +157,21 @@ $ cp ".../User Data/Default/Network/Cookies" /tmp/probe
 cp: cannot open ... for reading: Device or resource busy
 ```
 
-So a sync with the browser open refreshes everything else and leaves the clone's logins at whatever they were the last time it was closed. On macOS and Linux the lock is advisory and this does not arise. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
+So a sync with the browser open refreshes everything else and leaves the clone's logins at whatever they were the last time it was closed. On macOS and Linux the lock is advisory and this does not arise.
+
+`--close-source` is the way out, and the only one that needs no human:
+
+```
+$ use-browser clone brave --close-source
+closing brave so its cookies can be copied ...
+ok brave closed
+synced 250 file(s), 65.5 MB          # no files skipped: cookies came across
+ok brave pid=21180 profile="Default" (cloned, real logins)
+```
+
+It closes your browser with a close request rather than a kill — `taskkill` without `/F`, SIGTERM elsewhere — so Chromium flushes SQLite and writes its session file, then waits for the cookie file to actually become readable before copying. The clone is launched with `--restore-last-session`, so your tabs reopen in it and this reads as a handover rather than as losing the window you were in. Your real profile stays on disk and opens normally next time you launch the browser the usual way.
+
+browser-use does not do this; its daemon only launches a browser when none is running. It never needed to, because the cookie lock is advisory off Windows. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
 
 If the clone itself is running, `clone` attaches to it rather than writing into a live profile — which is also how a second session joins the first session's cloned browser. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
 

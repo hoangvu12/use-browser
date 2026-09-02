@@ -320,6 +320,17 @@ func profileInUse(dir string) bool {
 	return false
 }
 
+// cookiesLocked reports whether the cookie database cannot be read. A missing
+// file is not locked: there is simply nothing to copy.
+func cookiesLocked(path string) bool {
+	f, err := os.Open(path)
+	if err == nil {
+		f.Close()
+		return false
+	}
+	return !os.IsNotExist(err)
+}
+
 // closeBrowser asks a running browser to quit, then waits for it to let go of
 // its cookie database. It sends a close request rather than killing the
 // process: Chromium has to flush SQLite and write its session file, or the
@@ -396,11 +407,13 @@ func cmdClone(args []string) error {
 	//
 	// As in `launch`: only an instance we started counts. The real profile
 	// behind the inspect toggle must not short-circuit the clone.
-	if ownInstanceEndpoint(b.Name) != "" {
+	// --close-source means "I want fresh logins", so attaching to the clone
+	// that is already up would silently do nothing.
+	if ownInstanceEndpoint(b.Name) != "" && !closeSource {
 		fmt.Printf("ok already connected to %s (use-browser doctor for details)\n", b.Name)
 		return nil
 	}
-	if d := cloneProfileDir(b.Name); profileInUse(d) {
+	if d := cloneProfileDir(b.Name); profileInUse(d) && !closeSource {
 		return fmt.Errorf("a %s is already using %s but is not serving DevTools.\nclose that browser and run this again", b.Name, d)
 	}
 	if port == "" {
@@ -438,6 +451,15 @@ func cmdClone(args []string) error {
 		if err := closeBrowser(b, filepath.Join(src, profileDir, "Network", "Cookies"), 30*time.Second); err != nil {
 			return err
 		}
+		// The clone runs the same executable, so that close request took it
+		// down too. Wait for it to drop the singleton lock before writing.
+		deadline := time.Now().Add(15 * time.Second)
+		for profileInUse(clone) && time.Now().Before(deadline) {
+			time.Sleep(300 * time.Millisecond)
+		}
+		if profileInUse(clone) {
+			return fmt.Errorf("the cloned %s did not exit; close it and run this again", b.Name)
+		}
 		fmt.Printf("ok %s closed\n", b.Name)
 		restoreSession = true
 	}
@@ -468,12 +490,15 @@ func cmdClone(args []string) error {
 	} else {
 		// Refresh the copy so logins made in the real browser since the last
 		// clone are carried over. Only changed files move, so this is cheap.
-		if b.isRunning() {
-			// Not a general caveat: on Windows the cookie database is opened
-			// without share-read, so it is exactly the file that cannot be
-			// copied, and logins are exactly what the user wanted synced.
-			fmt.Printf("warning: %s is running, so its cookie database is locked and will not sync.\n", b.Name)
-			fmt.Printf("         logins in the clone stay as they were. close %s and rerun for fresh logins.\n", b.Name)
+		// Ask the file, not the process list: a browser that has just been
+		// asked to close still shows up in tasklist for a moment, and what
+		// actually matters is whether this one file can be read. On Windows
+		// it is opened without share-read, so it is exactly the file that
+		// cannot be copied, and logins are exactly what the user wanted.
+		if cookiesLocked(filepath.Join(src, profileDir, "Network", "Cookies")) {
+			fmt.Printf("warning: %s holds its cookie database open, so logins will not sync.\n", b.Name)
+			fmt.Printf("         everything else still syncs. for logins too:\n")
+			fmt.Printf("           use-browser clone %s --close-source   (closes %s, reopens your tabs in the clone)\n", b.Name, b.Name)
 		}
 		fmt.Printf("syncing %s -> %s ...\n", filepath.Join(src, profileDir), filepath.Join(clone, profileDir))
 		copyFile(filepath.Join(src, "Local State"), filepath.Join(clone, "Local State"))
