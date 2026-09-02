@@ -18,6 +18,7 @@ package main
 // (window.__bu), so they survive between calls for free.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,55 +92,158 @@ func activePort(profileDir string) (port, wsPath string) {
 }
 
 // browserWSURL resolves the browser-level WebSocket URL across every mode.
+// endpoint is a resolved DevTools connection and the route we took to it.
+type endpoint struct {
+	ws      string
+	browser string
+	mode    string // launch | clone | toggle | port | remote
+}
+
+// dirMode classifies a profile directory: our own dedicated profile, our copy
+// of the user's profile, or the user's real profile driven through the
+// <browser>://inspect toggle.
+func dirMode(d profileDir) string {
+	if strings.HasSuffix(d.path, "-clone") {
+		return "clone"
+	}
+	if d.browser != "" && userDataDirs()[d.browser] == d.path {
+		return "toggle"
+	}
+	return "launch"
+}
+
+// ownInstanceEndpoint is a live endpoint for a browser we started ourselves:
+// the dedicated launch profile, the clone of the real profile, or the port we
+// remembered. It deliberately ignores the user's real profile behind the
+// inspect toggle. Adopting that instead of launching is how every later
+// command ends up parked on an "Allow remote debugging?" popup.
+func ownInstanceEndpoint(name string) string {
+	if p := loadState().Port; p != 0 {
+		if ws := versionWS("http://127.0.0.1:" + strconv.Itoa(p)); ws != "" {
+			return ws
+		}
+	}
+	for _, dir := range []string{launchProfileDir(name), launchProfileDir(name) + "-clone"} {
+		port, wsPath := activePort(dir)
+		if port == "" {
+			continue
+		}
+		if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
+			return ws
+		}
+		if wsPath != "" && portAlive(port) {
+			return "ws://127.0.0.1:" + port + wsPath
+		}
+	}
+	return ""
+}
+
 func browserWSURL() (string, error) {
+	e, err := discover()
+	return e.ws, err
+}
+
+func discover() (endpoint, error) {
 	if v := os.Getenv("BU_CDP_WS"); v != "" {
-		return v, nil
+		return endpoint{ws: v, mode: "remote"}, nil
 	}
 	if v := os.Getenv("BU_CDP_URL"); v != "" {
 		if ws := versionWS(v); ws != "" {
-			return ws, nil
+			return endpoint{ws: ws, mode: "remote"}, nil
 		}
-		return "", fmt.Errorf("BU_CDP_URL=%s did not return a webSocketDebuggerUrl", v)
+		return endpoint{}, fmt.Errorf("BU_CDP_URL=%s did not return a webSocketDebuggerUrl", v)
 	}
 	// The port we launched the pinned browser on. Chrome sometimes serves
 	// DevTools without ever writing a DevToolsActivePort file, so this is
 	// checked before the directory scan.
 	if p := loadState().Port; p != 0 {
 		if ws := versionWS("http://127.0.0.1:" + strconv.Itoa(p)); ws != "" {
-			return ws, nil
+			return endpoint{ws: ws, browser: pinnedBrowser(), mode: "port"}, nil
 		}
 	}
 	// Scan profile directories for an active debugging port. Prefer the
 	// HTTP endpoint (gives a live WS URL); fall back to the file's ws path,
 	// which is what the chrome://inspect toggle leaves behind.
-	for _, dir := range profileDirs() {
-		port, wsPath := activePort(dir)
+	pin := pinnedBrowser()
+	var found []endpoint
+	for _, d := range profileDirs() {
+		port, wsPath := activePort(d.path)
 		if port == "" {
 			continue
 		}
-		if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
-			return ws, nil
+		ws := versionWS("http://127.0.0.1:" + port)
+		// The ws-path fallback (inspect-toggle mode) only counts if something
+		// is actually listening; a DevToolsActivePort file left behind by a
+		// closed browser is stale and must not fake a connection.
+		if ws == "" && wsPath != "" && portAlive(port) {
+			ws = "ws://127.0.0.1:" + port + wsPath
 		}
-		// The ws-path fallback (chrome://inspect toggle mode) only counts if
-		// something is actually listening; a DevToolsActivePort file left
-		// behind by a closed browser is stale and must not fake a connection.
-		if wsPath != "" && portAlive(port) {
-			return "ws://127.0.0.1:" + port + wsPath, nil
+		if ws == "" {
+			continue
 		}
+		e := endpoint{ws: ws, browser: d.browser, mode: dirMode(d)}
+		if pin != "" {
+			return e, nil // profileDirs already narrowed this to the pin
+		}
+		found = append(found, e)
 	}
-	// Last resort: probe the common ports directly. With a browser pinned the
-	// listener could belong to a different one (a Brave you left open), so
-	// the port has to be owned by the pinned browser's process to count.
-	pin := pinnedBrowser()
+	if len(found) > 0 {
+		if names := distinctBrowsers(found); len(names) > 1 {
+			return endpoint{}, ambiguousBrowsers(names)
+		}
+		return found[0], nil
+	}
+	// Last resort: probe the common ports directly. A named session is an
+	// explicit "I own my own browser", and this probe cannot tell one Chrome
+	// from another, so it would hand session B the browser session A launched.
+	if flagSession != "" {
+		return endpoint{}, fmt.Errorf("session %q has no browser yet.%srun: use-browser --session %s launch chrome   (or clone / connect)%sOr set BU_CDP_URL=http://host:port to share an existing one.", flagSession, "\n", flagSession, "\n")
+	}
 	for _, port := range []string{"9222", "9223", "9224"} {
 		if pin != "" && !portOwnedBy(port, pin) {
 			continue
 		}
 		if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
-			return ws, nil
+			return endpoint{ws: ws, browser: pin, mode: "port"}, nil
 		}
 	}
-	return "", fmt.Errorf("no browser debug endpoint found.\n%s\nOr set BU_CDP_URL=http://host:port for a remote endpoint.", connectHelp())
+	return endpoint{}, fmt.Errorf("no browser debug endpoint found.\n%s\nOr set BU_CDP_URL=http://host:port for a remote endpoint.", connectHelp())
+}
+
+// distinctBrowsers lists the browsers behind a set of live endpoints, in
+// browserOrder. An unattributable directory counts as its own name so it can
+// never be silently merged with a real browser.
+func distinctBrowsers(found []endpoint) []string {
+	seen := map[string]bool{}
+	for _, f := range found {
+		name := f.browser
+		if name == "" {
+			name = "unknown"
+		}
+		seen[name] = true
+	}
+	var names []string
+	for _, n := range browserOrder {
+		if seen[n] {
+			names = append(names, n)
+			delete(seen, n)
+		}
+	}
+	for n := range seen {
+		names = append(names, n)
+	}
+	return names
+}
+
+// ambiguousBrowsers refuses to guess. Picking one here is how an agent ends up
+// driving the Brave the user asked it to leave alone.
+func ambiguousBrowsers(names []string) error {
+	list, verb := strings.Join(names, ", "), "all accept"
+	if len(names) == 2 {
+		list, verb = names[0]+" and "+names[1], "both accept"
+	}
+	return fmt.Errorf("%s %s a debug connection, and no browser is pinned.%sPin one — it persists, so you only say it once:%s  use-browser use %s%sOr override a single command: use-browser --browser %s <command>",
+		list, verb, "\n", "\n", names[0], "\n", names[0])
 }
 
 func connected() bool {
@@ -164,6 +268,18 @@ type cdpClient struct {
 	nextID    int
 	sessionID string // attached page session (flattened)
 	targetID  string // attached page target id
+	// stale holds the remembered target id when it no longer exists. The
+	// client is attached to an arbitrary page so `tabs`/`tab` can run, but
+	// every page-level command refuses until a tab is picked again.
+	stale string
+}
+
+// checkTab fails when the client is only provisionally attached.
+func (c *cdpClient) checkTab() error {
+	if c.stale == "" {
+		return nil
+	}
+	return fmt.Errorf("current tab %s is gone (closed, or it belongs to another browser).%srun: use-browser tabs   then: use-browser tab <id>", shortID(c.stale), "\n")
 }
 
 type cdpResp struct {
@@ -220,10 +336,16 @@ func (c *cdpClient) rpc(method string, params any, sessionID string, timeout tim
 
 // Call routes to the current page session.
 func (c *cdpClient) Call(method string, params any) (json.RawMessage, error) {
+	if err := c.checkTab(); err != nil {
+		return nil, err
+	}
 	return c.rpc(method, params, c.sessionID, defaultTimeout)
 }
 
 func (c *cdpClient) CallTimeout(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	if err := c.checkTab(); err != nil {
+		return nil, err
+	}
 	return c.rpc(method, params, c.sessionID, timeout)
 }
 
@@ -266,6 +388,7 @@ func (c *cdpClient) attach(targetID string) error {
 	}
 	c.sessionID = r.SessionID
 	c.targetID = targetID
+	c.stale = ""
 	return nil
 }
 
@@ -315,22 +438,95 @@ func connect() (*cdpClient, error) {
 		}
 		pages = []target{{TargetID: id, Type: "page", URL: "about:blank"}}
 	}
-	st := loadState()
-	chosen := pages[0]
-	for _, p := range pages {
-		if p.TargetID == st.Target {
-			chosen = p
-			break
+	// --tab addresses a tab directly for this one invocation: no state read,
+	// no state write. This is the race-free way for several agents to drive
+	// several tabs of the same browser at once.
+	if flagTab != "" {
+		t, err := resolveTabID(pages, flagTab)
+		if err != nil {
+			c.Close()
+			return nil, err
 		}
+		if err := c.attach(t.TargetID); err != nil {
+			c.Close()
+			return nil, err
+		}
+		return c, nil
 	}
-	if err := c.attach(chosen.TargetID); err != nil {
+	st := loadState()
+	if st.Target != "" {
+		for _, p := range pages {
+			if p.TargetID == st.Target {
+				if err := c.attach(p.TargetID); err != nil {
+					c.Close()
+					return nil, err
+				}
+				return c, nil
+			}
+		}
+		// The remembered tab is gone. Silently adopting some other tab is how
+		// one agent ends up driving another agent's page, so attach only far
+		// enough for `tabs` and `tab` to run and let checkTab stop the rest.
+		if err := c.attach(pages[0].TargetID); err != nil {
+			c.Close()
+			return nil, err
+		}
+		c.stale = st.Target
+		return c, nil
+	}
+	// No tab picked yet: adopt one and remember it.
+	if err := c.attach(pages[0].TargetID); err != nil {
 		c.Close()
 		return nil, err
 	}
-	if st.Target != chosen.TargetID {
-		saveTarget(chosen.TargetID)
-	}
+	saveTarget(pages[0].TargetID)
 	return c, nil
+}
+
+// shortID is the 8-character prefix used to address a tab on the command line.
+// Target ids are 32 hex chars; 8 is plenty to stay unique within one browser
+// and short enough for an agent to copy around.
+func shortID(id string) string {
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return strings.ToLower(id)
+}
+
+// resolveTabID matches a target-id prefix (min 4 chars) against the open
+// pages. Indexes are deliberately not accepted here: --tab exists precisely
+// because positional indexes are unstable.
+func resolveTabID(pages []target, ref string) (*target, error) {
+	if len(ref) < 4 {
+		return nil, fmt.Errorf("tab id %q is too short (use at least 4 characters from `use-browser tabs`)", ref)
+	}
+	var hits []*target
+	for i := range pages {
+		if strings.HasPrefix(pages[i].TargetID, strings.ToUpper(ref)) || strings.HasPrefix(pages[i].TargetID, ref) {
+			hits = append(hits, &pages[i])
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		return nil, fmt.Errorf("no tab with id %q (run: use-browser tabs)", ref)
+	default:
+		return nil, fmt.Errorf("tab id %q is ambiguous, matches %d tabs (use more characters)", ref, len(hits))
+	}
+}
+
+// resolveTab accepts either a 1-based index from `use-browser tabs` or a
+// target-id prefix. A short run of digits is an index; anything else is an id.
+// Target ids are 32 hex chars, so the two never collide in practice.
+func resolveTab(pages []target, ref string) (*target, error) {
+	if n, err := strconv.Atoi(ref); err == nil && len(ref) < 8 {
+		if n < 1 || n > len(pages) {
+			return nil, fmt.Errorf("tab %d out of range (1-%d)", n, len(pages))
+		}
+		return &pages[n-1], nil
+	}
+	return resolveTabID(pages, ref)
 }
 
 func (c *cdpClient) Close() {
@@ -419,19 +615,67 @@ type buState struct {
 	Port int `json:"port,omitempty"`
 }
 
-func stateFile() string {
+// stateDir is where the state file(s) and launch profiles live.
+// stateDir holds the state file(s) and the automation profiles. It defaults to
+// the OS cache directory; BU_HOME moves the lot somewhere else, which matters
+// because cloned profiles are large and hold real cookies.
+func stateDir() string {
+	if v := strings.TrimSpace(os.Getenv("BU_HOME")); v != "" {
+		return v
+	}
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "use-browser", "state.json")
+	return filepath.Join(dir, "use-browser")
 }
 
-func loadState() buState {
+// stateFile is the current tab / pinned browser / debug port for this session.
+// Without a session that is one shared slot, which is fine for a single agent
+// and wrong for several: BU_SESSION (or --session) gives each agent its own.
+func stateFile() string {
+	name := "state.json"
+	if flagSession != "" {
+		name = "state-" + flagSession + ".json"
+	}
+	return filepath.Join(stateDir(), name)
+}
+
+// readState parses one state file. A missing file is not an error: it just
+// means nothing has been chosen yet.
+func readState(path string) (buState, error) {
 	var st buState
-	b, err := os.ReadFile(stateFile())
-	if err == nil {
-		json.Unmarshal(b, &st)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return st, nil
+	}
+	// PowerShell's Set-Content, Out-File and > all write a UTF-8 BOM by
+	// default. Without this the parse fails and the pin, the port and the
+	// current tab all vanish with no message.
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	if err := json.Unmarshal(b, &st); err != nil {
+		return buState{}, fmt.Errorf("state file %s is not valid JSON: %v", path, err)
+	}
+	return st, nil
+}
+
+var warnedBadState bool
+
+func loadState() buState {
+	st, err := readState(stateFile())
+	if err != nil {
+		if !warnedBadState {
+			warnedBadState = true
+			fmt.Fprintf(os.Stderr, "warning: %v%swarning: ignoring the browser pin and current tab; fix or delete that file%s", err, "\n", "\n")
+		}
+		return buState{}
+	}
+	// A session keeps its own tab and port, but inherits the browser pin, so
+	// `use-browser use chrome` still has to be said only once.
+	if flagSession != "" && st.Browser == "" {
+		if def, err := readState(filepath.Join(stateDir(), "state.json")); err == nil {
+			st.Browser = def.Browser
+		}
 	}
 	return st
 }
@@ -444,7 +688,11 @@ func saveState(st buState) {
 }
 
 // saveTarget updates the current tab without clobbering the pinned browser.
+// Under --tab the invocation is stateless by contract, so it writes nothing.
 func saveTarget(id string) {
+	if flagTab != "" {
+		return
+	}
 	st := loadState()
 	st.Target = id
 	saveState(st)

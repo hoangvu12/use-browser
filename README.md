@@ -90,6 +90,115 @@ The agent acts by index: `use-browser click 17`, `use-browser fill 4 "query"`. E
 
 There is deliberately no daemon. browser-use runs one to keep its CDP connection and session state alive between invocations. In Go, opening a fresh WebSocket to Chrome costs around 10 ms, so each command just connects, acts, and exits. The only persistent state is the current tab id in a small JSON file.
 
+## Choosing a browser
+
+With one Chromium installed there is nothing to do. With several, pin one — the pin persists, so it is said once:
+
+```bash
+use-browser use chrome        # persists
+use-browser --browser chrome snap   # one command only, writes nothing
+```
+
+With nothing pinned and two browsers debuggable, discovery stops rather than guessing:
+
+```
+$ use-browser snap
+error: chrome and brave both accept a debug connection, and no browser is pinned.
+Pin one — it persists, so you only say it once:
+  use-browser use chrome
+Or override a single command: use-browser --browser chrome <command>
+```
+
+Guessing here is how an agent ends up driving the Brave you asked it to leave alone. The ambiguous case is the only one that stops; a single browser still needs no configuration.
+
+`use-browser profiles [browser]` lists your real profiles with the names your browser shows you, so `clone --profile` is discoverable:
+
+```
+$ use-browser profiles chrome
+chrome profiles (~/AppData/Local/Google/Chrome/User Data):
+  Default      "Personal"
+  Profile 1    "Work"
+copy one and drive it: use-browser clone chrome --profile "Default"
+```
+
+### Driving your real profile, and the permission dialog
+
+There are two routes to your everyday profile, and only one of them works unattended.
+
+**Flags don't work.** Chromium 136 ignores `--remote-debugging-port` whenever `--user-data-dir` is the browser's default one — it starts, and serves no endpoint. That is a deliberate fix for the "point a debug port at someone's live cookies" attack, and passing the same path explicitly doesn't dodge it. This restriction is the entire reason `clone` exists.
+
+**The `chrome://inspect` toggle works, at a price.** That is `use-browser connect`, and it drives the real profile with no copy at all. But on Chrome and Brave 144+ the "Allow remote debugging?" dialog is **per connection, not per session** — measured here, not assumed:
+
+```
+$ time use-browser js "location.host"     # after a previous Allow click
+error: browser websocket ws://127.0.0.1:63915/...: i/o timeout
+real    1m0.031s
+```
+
+One accepted click buys exactly one connection. use-browser opens one per invocation, so every invocation needs a human. A daemon would only move the click to once-per-daemon-lifetime, so it doesn't rescue unattended use either. Batch mode is the real lever: one invocation is one connection, so a whole task costs one click.
+
+So for anything unattended, `clone` is the mechanism — flag-based debugging on a copied profile never prompts. `use-browser doctor` tells you which mode you are in.
+
+### Keeping a clone current
+
+A copy drifts, so `clone` refreshes an existing clone before launching it, moving only changed files:
+
+```
+$ use-browser clone brave
+synced 6176 file(s), 884.0 MB, 45 skipped     # first pass
+$ use-browser clone brave
+synced 42 file(s), 32.9 MB, 43 skipped        # 1.2s
+```
+
+Modification times are preserved so the second pass has something to compare against. SQLite databases move as a group with their `-wal`/`-shm`/`-journal` sidecars, and sidecars the source has dropped are deleted from the copy — a fresh `Cookies` beside a stale journal reads as corrupt. Close the real browser first if you want a complete sync; files it holds open are skipped, and cookies are usually among them. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
+
+If the clone itself is running, `clone` attaches to it rather than writing into a live profile. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
+
+### Disk
+
+```
+$ use-browser clean
+  profile-brave-clone      677.9 MB
+  profile-chrome           892.6 MB
+  total                   2080.9 MB
+```
+
+`use-browser clean <name>...` or `--all` deletes them, skipping any that a browser is using. A deleted clone is re-copied on the next `clone`. `BU_HOME=<dir>` relocates profiles and state; the default is the OS cache directory.
+
+## Tabs and parallel agents
+
+`use-browser tabs` gives every tab a stable 8-character id, and that is how you should address them:
+
+```
+$ use-browser tabs
+1  0a3328d8 "Example Domain" https://example.com/
+2* 5f44a085 "Hacker News" https://news.ycombinator.com/
+```
+
+The leading positions are for humans. They come from `Target.getTargets`, which is neither tab-strip order nor stable — open a tab and an existing one can slide from `2` to `4` — so an agent that remembers a position ends up driving a different page. The id doesn't move, and `use-browser open` prints the id of the tab it just made.
+
+`--tab <id>` runs a single command against a tab without switching to it, reading and writing no state at all:
+
+```bash
+a=$(use-browser open https://example.com | awk '{print $2}')
+b=$(use-browser open https://example.org | awk '{print $2}')
+use-browser --tab "$a" snap
+use-browser --tab "$b" click 3
+```
+
+Snapshot indexes live in the page (`window.__bu`), so they're already per-tab: `[5]` in one tab has nothing to do with `[5]` in another.
+
+For several agents at once, `BU_SESSION=<name>` (or `--session <name>`) gives each its own state file, so "current tab" stops being a machine-wide singleton:
+
+```bash
+BU_SESSION=research use-browser open https://example.com
+BU_SESSION=checkout use-browser open https://shop.example.com
+```
+
+A session also scopes the pinned browser, the debug port and the launch profile, so `BU_SESSION=a use-browser launch chrome` and `BU_SESSION=b use-browser launch chrome` really are two browsers. A named session never adopts a browser it didn't start — otherwise the port probe would hand session `b` the instance session `a` launched — so each one launches, clones, connects, or gets pointed at an endpoint with `BU_CDP_URL`. Agents that should share the user's logins can all point at the same `BU_CDP_URL` and keep to their own tab ids.
+
+When the remembered tab is gone, page commands fail with `current tab <id> is gone` instead of quietly adopting whatever tab happens to be first — that silent adoption is how one agent ends up typing into another's page. `tabs` and `tab` keep working, since they're how you recover.
+
 ## Commands
 
 ```
@@ -102,11 +211,20 @@ use-browser type <text>                   type into the focused element
 use-browser key <k>                       Enter, Tab, esc, down, ctrl+a, shift+Tab
 use-browser scroll [down|up|top|bottom|<px>]
 use-browser shot [path] [--full]          screenshot PNG, prints the file path
-use-browser tabs / tab <n> / open [url] / close
+use-browser tabs                          list tabs: "2* a1b2c3d4 "title" url"
+use-browser tab <id | n>                  switch current tab
+use-browser open [url]                    new tab, prints its id
+use-browser close [id]                    close the current tab, or the one named
 use-browser js <expr>                     run JavaScript in the page (js - reads stdin)
 use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
 use-browser use [browser]                 pin browser selection (`auto` clears it)
+use-browser profiles [browser]            list that browser's real profiles, for clone
+use-browser clean [name|--all]            list or delete use-browser's own profiles
 use-browser doctor [browser] | skill | help
+
+--tab <id>                                run one command against a tab, writing no state
+--session NAME                            scope this agent's state (env: BU_SESSION)
+--browser NAME                            one-shot browser override (env: BU_BROWSER)
 ```
 
 Multi-step flows go through batch mode, which runs command lines from stdin over a single connection:

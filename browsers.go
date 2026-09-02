@@ -69,32 +69,44 @@ func userDataDirs() map[string]string {
 	}
 }
 
-// defaultUserDataDirs returns those directories in browserOrder.
-func defaultUserDataDirs() []string {
-	byName := userDataDirs()
-	var dirs []string
-	for _, name := range browserOrder {
-		if d := byName[name]; d != "" {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs
-}
-
-// pinnedBrowser is the browser every command should use, or "" for the old
-// "whatever is running" behaviour. BU_BROWSER wins over the pin written by
-// `use-browser use`, so a single command can override without changing state.
+// pinnedBrowser is the browser every command should use, or "" for the
+// "whatever is running" behaviour. --browser beats BU_BROWSER beats the pin
+// written by `use-browser use`, so either override works without touching
+// state.
 func pinnedBrowser() string {
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("BU_BROWSER"))); v != "" {
-		return v
+	name := flagBrowser
+	if name == "" {
+		name = os.Getenv("BU_BROWSER")
 	}
-	return strings.ToLower(strings.TrimSpace(loadState().Browser))
+	if name == "" {
+		name = loadState().Browser
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	// "auto" is a stored pin meaning "explicitly no pin". It exists so that
+	// `use auto` inside a session is not re-filled from the default pin.
+	if name == "auto" {
+		return ""
+	}
+	return name
 }
 
-// pinBrowser records the browser every later command should use. A no-op when
-// BU_BROWSER is set, so the env var stays a one-shot override.
+// overridden reports a one-shot browser choice, which must never reach the
+// state file.
+func overridden() bool {
+	return flagBrowser != "" || os.Getenv("BU_BROWSER") != ""
+}
+
+func overrideSource() string {
+	if flagBrowser != "" {
+		return "--browser " + flagBrowser
+	}
+	return "BU_BROWSER=" + os.Getenv("BU_BROWSER")
+}
+
+// pinBrowser records the browser every later command should use. A no-op under
+// --browser / BU_BROWSER, so both stay one-shot overrides.
 func pinBrowser(name string) {
-	if os.Getenv("BU_BROWSER") != "" {
+	if overridden() {
 		return
 	}
 	st := loadState()
@@ -107,9 +119,30 @@ func pinBrowser(name string) {
 	saveState(st)
 }
 
-// launchProfileDir is the dedicated automation profile for a browser.
+// launchProfileDir is the dedicated automation profile for a browser. Named
+// sessions get their own directory: two agents launching the same browser into
+// one user-data-dir would not get two browsers, because Chromium forwards the
+// second launch into the first instance.
 func launchProfileDir(name string) string {
-	return filepath.Join(filepath.Dir(stateFile()), "profile-"+name)
+	dir := "profile-" + name
+	if flagSession != "" {
+		dir += "-" + flagSession
+	}
+	return filepath.Join(stateDir(), dir)
+}
+
+// ownedProfile reports whether a profile directory under the state dir belongs
+// to this session, so one session never discovers another session's browser.
+func ownedProfile(dirName string) bool {
+	if !strings.HasPrefix(dirName, "profile-") {
+		return false
+	}
+	base := strings.TrimSuffix(dirName, "-clone")
+	if flagSession == "" {
+		// The default session owns profile-<browser> and nothing suffixed.
+		return !strings.Contains(strings.TrimPrefix(base, "profile-"), "-")
+	}
+	return strings.HasSuffix(base, "-"+flagSession)
 }
 
 // freeDebugPort returns the first port from 9222 upward that nothing is
@@ -132,25 +165,68 @@ func freeDebugPort() int {
 // When a browser is pinned, only that browser's directories are considered —
 // otherwise another Chromium running with debugging on (a Brave you left
 // open, say) would be picked up instead.
-func profileDirs() []string {
+// profileDir is a directory that might hold a DevToolsActivePort file, with
+// the browser it belongs to (empty when we cannot tell).
+type profileDir struct {
+	path    string
+	browser string
+}
+
+// profileBrowser is the browser a launch-profile directory belongs to:
+// profile-<browser>[-<session>][-clone]. No browser name contains a dash, so
+// the first segment is the browser.
+func profileBrowser(dirName string) string {
+	rest := strings.TrimPrefix(dirName, "profile-")
+	if i := strings.IndexByte(rest, '-'); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
+}
+
+func profileDirs() []profileDir {
 	if pin := pinnedBrowser(); pin != "" {
 		// dedicated launch profile, cloned real profile, then the real one
-		dirs := []string{launchProfileDir(pin), launchProfileDir(pin) + "-clone"}
+		dirs := []profileDir{
+			{launchProfileDir(pin), pin},
+			{launchProfileDir(pin) + "-clone", pin},
+		}
 		if d := userDataDirs()[pin]; d != "" {
-			dirs = append(dirs, d)
+			dirs = append(dirs, profileDir{d, pin})
 		}
 		return dirs
 	}
-	var dirs []string
-	stateDir := filepath.Dir(stateFile())
-	if entries, err := os.ReadDir(stateDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), "profile-") {
-				dirs = append(dirs, filepath.Join(stateDir, e.Name()))
+	dir := stateDir()
+	entries, _ := os.ReadDir(dir)
+	var owned []string
+	for _, e := range entries {
+		if e.IsDir() && ownedProfile(e.Name()) {
+			owned = append(owned, e.Name())
+		}
+	}
+	// os.ReadDir sorts by filename, which puts profile-brave ahead of
+	// profile-chrome and quietly makes Brave win. Walk browserOrder instead so
+	// our own launch profiles follow the same preference as the real ones.
+	var dirs []profileDir
+	taken := map[string]bool{}
+	for _, name := range browserOrder {
+		for _, d := range owned {
+			if profileBrowser(d) == name {
+				dirs = append(dirs, profileDir{filepath.Join(dir, d), name})
+				taken[d] = true
 			}
 		}
 	}
-	return append(dirs, defaultUserDataDirs()...)
+	for _, d := range owned { // directories we cannot attribute, kept last
+		if !taken[d] {
+			dirs = append(dirs, profileDir{filepath.Join(dir, d), ""})
+		}
+	}
+	for _, name := range browserOrder {
+		if d := userDataDirs()[name]; d != "" {
+			dirs = append(dirs, profileDir{d, name})
+		}
+	}
+	return dirs
 }
 
 // inspectURL is the settings page for the real-profile debugging toggle.
@@ -384,11 +460,18 @@ func cmdLaunch(args []string) error {
 		return err
 	}
 	pinBrowser(b.Name)
-	if connected() {
+	// Only skip when an instance we started is already up. The user's real
+	// browser behind the inspect toggle must not count: adopting it would put
+	// every later command behind an "Allow remote debugging?" popup, which is
+	// exactly what `launch` exists to avoid.
+	if ownInstanceEndpoint(b.Name) != "" {
 		fmt.Printf("ok already connected to %s (use-browser doctor for details)\n", b.Name)
 		return nil
 	}
 	profile := launchProfileDir(b.Name)
+	if profileInUse(profile) {
+		return fmt.Errorf("a %s is already using %s but is not serving DevTools.\nclose that browser and run this again", b.Name, profile)
+	}
 	os.MkdirAll(profile, 0o755)
 	port := freeDebugPort()
 	savePort(port)
@@ -401,10 +484,12 @@ func cmdLaunch(args []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %v", b.Path, err)
 	}
-	// wait for the DevTools endpoint
+	// Wait for OUR endpoint. connected() would also accept the user's real
+	// browser sitting behind the inspect toggle, and would then report success
+	// for a browser we never started.
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if connected() {
+		if ownInstanceEndpoint(b.Name) != "" {
 			fmt.Printf("ok %s pid=%d port=%d profile=%s\n", b.Name, cmd.Process.Pid, port, profile)
 			return nil
 		}
@@ -422,7 +507,10 @@ func cmdUse(args []string) error {
 			fmt.Println("browser: auto (first running, else install order)")
 		} else {
 			src := "state file"
-			if os.Getenv("BU_BROWSER") != "" {
+			switch {
+			case flagBrowser != "":
+				src = "--browser"
+			case os.Getenv("BU_BROWSER") != "":
 				src = "BU_BROWSER"
 			}
 			fmt.Printf("browser: %s (from %s)\n", pin, src)
@@ -436,7 +524,9 @@ func cmdUse(args []string) error {
 	}
 	name := strings.ToLower(args[0])
 	if name == "auto" || name == "none" || name == "--clear" {
-		saveState(buState{})
+		// Store the word rather than an empty field: inside a session an empty
+		// pin is inherited from the default state file, so "" would not stick.
+		saveState(buState{Browser: "auto"})
 		fmt.Println("ok browser: auto")
 		return nil
 	}
@@ -445,14 +535,32 @@ func cmdUse(args []string) error {
 		return err
 	}
 	pinBrowser(b.Name)
-	if os.Getenv("BU_BROWSER") != "" {
-		fmt.Printf("warning: BU_BROWSER=%s is set and overrides this pin for the current shell\n", os.Getenv("BU_BROWSER"))
+	if overridden() {
+		fmt.Printf("warning: %s overrides this pin and no pin was written\n", overrideSource())
 	}
 	fmt.Printf("ok browser: %s (%s)\n", b.Name, b.Path)
 	if !connected() {
 		fmt.Printf("not connected yet — start it with: use-browser clone %s   (or: use-browser launch %s)\n", b.Name, b.Name)
 	}
 	return nil
+}
+
+// endpointModeText explains, in one line, how we reached this browser.
+func endpointModeText(e endpoint) string {
+	switch e.mode {
+	case "launch":
+		return "dedicated automation profile (use-browser launch)"
+	case "clone":
+		return "copy of your real profile (use-browser clone) - your logins, no toggle"
+	case "toggle":
+		return "your real profile via the inspect toggle (use-browser connect)"
+	case "remote":
+		return "remote endpoint (BU_CDP_URL / BU_CDP_WS)"
+	default:
+		// savePort is only ever called by launch and clone, so this is still
+		// an instance we started: flag-based debugging, no permission popup.
+		return "remembered debug port (a browser use-browser started)"
+	}
 }
 
 // portOwnedBy reports whether the process listening on a local port is the

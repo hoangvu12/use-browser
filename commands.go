@@ -59,7 +59,7 @@ func cmdOpen(c *cdpClient, args []string) error {
 	}
 	saveTarget(id)
 	if err := c.attach(id); err != nil {
-		fmt.Printf("ok tab %s\n", id[:8])
+		fmt.Printf("ok %s (created, but could not attach)\n", shortID(id))
 		return nil
 	}
 	if u != "about:blank" {
@@ -77,7 +77,7 @@ func cmdOpen(c *cdpClient, args []string) error {
 	info, _ := c.evalString(`JSON.stringify({u: location.href.slice(0,300), t: document.title.slice(0,120)})`)
 	var it struct{ U, T string }
 	json.Unmarshal([]byte(info), &it)
-	fmt.Printf("ok %s %q\n", it.U, it.T)
+	fmt.Printf("ok %s %s %q\n", shortID(id), it.U, it.T)
 	return nil
 }
 
@@ -88,49 +88,73 @@ func cmdTabs(c *cdpClient, _ []string) error {
 	}
 	for i, p := range pages {
 		mark := " "
-		if p.TargetID == c.targetID {
+		if p.TargetID == c.targetID && c.stale == "" {
 			mark = "*"
 		}
 		title := p.Title
 		if len(title) > 60 {
 			title = title[:60] + "…"
 		}
-		fmt.Printf("%d%s %q %s\n", i+1, mark, title, p.URL)
+		fmt.Printf("%d%s %s %q %s\n", i+1, mark, shortID(p.TargetID), title, p.URL)
+	}
+	if c.stale != "" {
+		fmt.Printf("(no current tab: %s is gone — pick one with: use-browser tab <id>)\n", shortID(c.stale))
 	}
 	return nil
 }
 
 func cmdTab(c *cdpClient, args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: use-browser tab <n>  (from `use-browser tabs`)")
-	}
-	n, err := strconv.Atoi(args[0])
-	if err != nil {
-		return fmt.Errorf("usage: use-browser tab <n>")
+		return fmt.Errorf("usage: use-browser tab <id | n>  (from `use-browser tabs`)")
 	}
 	pages, err := c.pageTargets()
 	if err != nil {
 		return err
 	}
-	if n < 1 || n > len(pages) {
-		return fmt.Errorf("tab %d out of range (1-%d)", n, len(pages))
+	t, err := resolveTab(pages, args[0])
+	if err != nil {
+		return err
 	}
-	t := pages[n-1]
 	saveTarget(t.TargetID)
 	if err := c.attach(t.TargetID); err != nil {
 		return err
 	}
 	c.browserCall("Target.activateTarget", map[string]any{"targetId": t.TargetID})
-	fmt.Printf("ok %q %s\n", t.Title, t.URL)
+	fmt.Printf("ok %s %q %s\n", shortID(t.TargetID), t.Title, t.URL)
 	return nil
 }
 
-func cmdClose(c *cdpClient, _ []string) error {
-	if _, err := c.browserCall("Target.closeTarget", map[string]any{"targetId": c.targetID}); err != nil {
+// cmdClose closes the current tab, or the one named by id. Closing by id lets
+// an agent clean up a tab it owns without first switching to it.
+func cmdClose(c *cdpClient, args []string) error {
+	id := c.targetID
+	switch len(args) {
+	case 0:
+		if err := c.checkTab(); err != nil {
+			return err
+		}
+	case 1:
+		pages, err := c.pageTargets()
+		if err != nil {
+			return err
+		}
+		t, err := resolveTabID(pages, args[0])
+		if err != nil {
+			return err
+		}
+		id = t.TargetID
+	default:
+		return fmt.Errorf("usage: use-browser close [id]")
+	}
+	if _, err := c.browserCall("Target.closeTarget", map[string]any{"targetId": id}); err != nil {
 		return err
 	}
+	if id != c.targetID {
+		fmt.Printf("ok closed %s\n", shortID(id))
+		return nil
+	}
 	saveTarget("")
-	fmt.Println("ok")
+	fmt.Printf("ok closed %s (no current tab now: use-browser tabs)\n", shortID(id))
 	return nil
 }
 
@@ -431,13 +455,20 @@ func cmdDoctor(args []string) error {
 	} else if os.Getenv("BU_BROWSER") != "" {
 		fmt.Printf("pinned: %s (from BU_BROWSER)\n", pin)
 	}
-	wsURL, err := browserWSURL()
+	e, err := discover()
 	if err != nil {
 		fmt.Println("browser: NOT CONNECTED")
 		fmt.Println(err)
 		return fmt.Errorf("doctor found problems")
 	}
-	fmt.Printf("endpoint: %s\n", wsURL)
+	fmt.Printf("endpoint: %s\n", e.ws)
+	fmt.Printf("mode: %s\n", endpointModeText(e))
+	if e.mode == "toggle" {
+		fmt.Println("note: this browser asks \"Allow remote debugging?\" on every new connection, and")
+		fmt.Println("      use-browser opens one per command. Two ways to stop the popups:")
+		fmt.Printf("        use-browser clone %s   same logins, no toggle, no popup\n", e.browser)
+		fmt.Println("        batch mode              many commands over a single connection")
+	}
 	c, err := connect()
 	if err != nil {
 		fmt.Printf("connect: error: %v\n", err)
@@ -453,10 +484,15 @@ func cmdDoctor(args []string) error {
 	cur := "none"
 	for _, p := range pages {
 		if p.TargetID == c.targetID {
-			cur = fmt.Sprintf("%q %s", p.Title, p.URL)
+			cur = fmt.Sprintf("%s %q %s", shortID(p.TargetID), p.Title, p.URL)
 		}
 	}
 	fmt.Printf("current tab: %s\n", cur)
+	if flagSession == "" {
+		fmt.Println("session: default (shared — give each parallel agent its own with BU_SESSION=<name>)")
+	} else {
+		fmt.Printf("session: %s\n", flagSession)
+	}
 	fmt.Printf("state file: %s\n", stateFile())
 	return nil
 }
