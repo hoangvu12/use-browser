@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -319,6 +320,35 @@ func profileInUse(dir string) bool {
 	return false
 }
 
+// closeBrowser asks a running browser to quit, then waits for it to let go of
+// its cookie database. It sends a close request rather than killing the
+// process: Chromium has to flush SQLite and write its session file, or the
+// user loses their tabs and the copy taken next is torn.
+func closeBrowser(b *browser, cookieDB string, timeout time.Duration) error {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// No /F. That sends WM_CLOSE, which Chromium shuts down cleanly on;
+		// /F would terminate it mid-write.
+		cmd = exec.Command("taskkill", "/IM", filepath.Base(b.Path))
+	} else {
+		cmd = exec.Command("pkill", "-TERM", "-f", b.Path)
+	}
+	cmd.Run() // a non-zero exit only means nothing matched
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		f, err := os.Open(cookieDB)
+		if err == nil {
+			f.Close()
+			return nil
+		}
+		if os.IsNotExist(err) {
+			return nil // nothing to wait for
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("%s still holds %s after %s; close it yourself and run this again", b.Name, cookieDB, timeout)
+}
+
 // cmdClone clones the user's real profile and launches the browser against
 // the copy with flag-based remote debugging enabled.
 //
@@ -329,6 +359,7 @@ func cmdClone(args []string) error {
 	port := "" // empty: pick the first free port at launch time
 	fresh := false
 	noSync := false
+	closeSource := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--profile", "-p":
@@ -345,6 +376,8 @@ func cmdClone(args []string) error {
 			fresh = true
 		case "--no-sync":
 			noSync = true
+		case "--close-source":
+			closeSource = true
 		default:
 			if !strings.HasPrefix(args[i], "-") && name == "" {
 				name = args[i]
@@ -396,6 +429,19 @@ func cmdClone(args []string) error {
 
 	clone := cloneProfileDir(b.Name)
 
+	// The running browser holds its cookie database exclusively on Windows,
+	// and that is the one file the logins live in. Closing it first is the
+	// only way to sync logins without a human clicking anything.
+	restoreSession := false
+	if closeSource && b.isRunning() {
+		fmt.Printf("closing %s so its cookies can be copied ...\n", b.Name)
+		if err := closeBrowser(b, filepath.Join(src, profileDir, "Network", "Cookies"), 30*time.Second); err != nil {
+			return err
+		}
+		fmt.Printf("ok %s closed\n", b.Name)
+		restoreSession = true
+	}
+
 	needCopy := fresh
 	if _, err := os.Stat(filepath.Join(clone, profileDir)); err != nil {
 		needCopy = true
@@ -444,13 +490,19 @@ func cmdClone(args []string) error {
 		}
 	}
 
-	cmd := exec.Command(b.Path,
-		"--remote-debugging-port="+port,
-		"--user-data-dir="+clone,
-		"--profile-directory="+profileDir,
+	cloneArgs := []string{
+		"--remote-debugging-port=" + port,
+		"--user-data-dir=" + clone,
+		"--profile-directory=" + profileDir,
 		"--no-first-run",
 		"--no-default-browser-check",
-	)
+	}
+	// We just closed the browser the user was working in. Reopen their tabs
+	// here, so the clone takes over rather than replacing what they had.
+	if restoreSession {
+		cloneArgs = append(cloneArgs, "--restore-last-session")
+	}
+	cmd := exec.Command(b.Path, cloneArgs...)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %v", b.Path, err)
 	}

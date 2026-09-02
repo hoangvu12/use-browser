@@ -59,6 +59,9 @@ Setup:
 
 clone options: --profile "Profile 1"  pick which profile to copy | --fresh  re-copy
                --no-sync  attach without refreshing | --port N
+               --close-source  close your real browser first, then reopen its
+               tabs in the clone. The only way to sync logins with no clicks:
+               a running browser holds its cookie file exclusively.
 An existing clone is refreshed from your real profile on every clone command,
 so logins you have made since last time come across. Only changed files move.
 
