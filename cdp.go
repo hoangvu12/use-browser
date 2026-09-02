@@ -123,7 +123,14 @@ func ownInstanceEndpoint(name string) string {
 			return ws
 		}
 	}
-	for _, dir := range []string{launchProfileDir(name), launchProfileDir(name) + "-clone"} {
+	for _, dir := range []string{launchProfileDir(name), cloneProfileDir(name)} {
+		// Our own port file first: it is the only record a second session has
+		// of the port a shared clone was launched on.
+		if p := readPortFile(dir); p != "" {
+			if ws := versionWS("http://127.0.0.1:" + p); ws != "" {
+				return ws
+			}
+		}
 		port, wsPath := activePort(dir)
 		if port == "" {
 			continue
@@ -167,16 +174,26 @@ func discover() (endpoint, error) {
 	pin := pinnedBrowser()
 	var found []endpoint
 	for _, d := range profileDirs() {
-		port, wsPath := activePort(d.path)
-		if port == "" {
-			continue
+		// Our own port file first. Chrome and Brave often never write
+		// DevToolsActivePort, and a clone shared between sessions has no
+		// other record of the port it was launched on.
+		ws := ""
+		if p := readPortFile(d.path); p != "" {
+			ws = versionWS("http://127.0.0.1:" + p)
 		}
-		ws := versionWS("http://127.0.0.1:" + port)
-		// The ws-path fallback (inspect-toggle mode) only counts if something
-		// is actually listening; a DevToolsActivePort file left behind by a
-		// closed browser is stale and must not fake a connection.
-		if ws == "" && wsPath != "" && portAlive(port) {
-			ws = "ws://127.0.0.1:" + port + wsPath
+		if ws == "" {
+			port, wsPath := activePort(d.path)
+			if port == "" {
+				continue
+			}
+			ws = versionWS("http://127.0.0.1:" + port)
+			// The ws-path fallback (inspect-toggle mode) only counts if
+			// something is actually listening; a DevToolsActivePort file left
+			// behind by a closed browser is stale and must not fake a
+			// connection.
+			if ws == "" && wsPath != "" && portAlive(port) {
+				ws = "ws://127.0.0.1:" + port + wsPath
+			}
 		}
 		if ws == "" {
 			continue

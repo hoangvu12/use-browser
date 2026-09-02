@@ -76,7 +76,9 @@ synced 42 file(s), 32.9 MB, 43 skipped (locked or unreadable)
 - `--no-sync` attaches to the existing clone unchanged. `--fresh` re-copies
   everything from scratch.
 - If the clone itself is already running, `use-browser` attaches to it instead
-  of syncing. Writing into a live profile corrupts its databases.
+  of syncing. Writing into a live profile corrupts its databases. This is also
+  what happens when a second session clones the same browser: it joins the
+  running one rather than making a second copy.
 
 ## Disk
 
@@ -160,14 +162,17 @@ profile. Sessions cannot see each other's state.
 
 Two ways to run in parallel:
 
-- **Own browser per agent** — `BU_SESSION=a use-browser launch chrome` gives
-  session `a` its own instance, profile and port. Fully isolated; use this
-  when tasks must not share cookies or logins. A named session never adopts a
-  browser it did not start, so each agent must launch, clone or connect its
-  own (or be pointed at one with `BU_CDP_URL`).
-- **Shared browser, one tab each** — point every agent at the same endpoint
-  with `BU_CDP_URL=http://127.0.0.1:9222` and keep to your own tab id. Shares
-  the user's logins; cheaper than one browser per agent.
+- **Shared cloned browser, one tab each** — the normal way to run several
+  agents against the user's real logins. A clone is shared by every session:
+  one copy per browser, never one per agent, because it runs to hundreds of
+  megabytes. The first session to run `use-browser clone <browser>` launches
+  it; later sessions attach to the same browser and keep to their own tab.
+- **Own empty browser per agent** — `BU_SESSION=a use-browser launch chrome`
+  gives session `a` its own instance, profile and port. `launch` profiles are
+  per session, so this is fully isolated, but it starts with no logins. Use it
+  when tasks must not share cookies. A named session never adopts a browser it
+  did not start, so each agent launches its own or is pointed at one with
+  `BU_CDP_URL`.
 
 Keep one working tab per task. Before opening another, check `use-browser tabs`
 and reuse a matching one. Never close a tab you did not open.

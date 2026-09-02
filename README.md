@@ -152,7 +152,7 @@ synced 42 file(s), 32.9 MB, 43 skipped        # 1.2s
 
 Modification times are preserved so the second pass has something to compare against. SQLite databases move as a group with their `-wal`/`-shm`/`-journal` sidecars, and sidecars the source has dropped are deleted from the copy — a fresh `Cookies` beside a stale journal reads as corrupt. Close the real browser first if you want a complete sync; files it holds open are skipped, and cookies are usually among them. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
 
-If the clone itself is running, `clone` attaches to it rather than writing into a live profile. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
+If the clone itself is running, `clone` attaches to it rather than writing into a live profile — which is also how a second session joins the first session's cloned browser. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
 
 ### Disk
 
@@ -195,7 +195,7 @@ BU_SESSION=research use-browser open https://example.com
 BU_SESSION=checkout use-browser open https://shop.example.com
 ```
 
-A session also scopes the pinned browser, the debug port and the launch profile, so `BU_SESSION=a use-browser launch chrome` and `BU_SESSION=b use-browser launch chrome` really are two browsers. A named session never adopts a browser it didn't start — otherwise the port probe would hand session `b` the instance session `a` launched — so each one launches, clones, connects, or gets pointed at an endpoint with `BU_CDP_URL`. Agents that should share the user's logins can all point at the same `BU_CDP_URL` and keep to their own tab ids.
+A session also scopes the pinned browser, the debug port and the launch profile, so `BU_SESSION=a use-browser launch chrome` and `BU_SESSION=b use-browser launch chrome` really are two browsers. Clones are the deliberate exception: they are shared by every session, one copy per browser rather than one per agent, because a clone runs to hundreds of megabytes. Two sessions cloning the same browser get one browser and a tab each. A named session never adopts a browser it didn't start — otherwise the port probe would hand session `b` the instance session `a` launched — so each one launches, clones, connects, or gets pointed at an endpoint with `BU_CDP_URL`. Agents that should share the user's logins can all point at the same `BU_CDP_URL` and keep to their own tab ids.
 
 When the remembered tab is gone, page commands fail with `current tab <id> is gone` instead of quietly adopting whatever tab happens to be first — that silent adoption is how one agent ends up typing into another's page. `tabs` and `tab` keep working, since they're how you recover.
 

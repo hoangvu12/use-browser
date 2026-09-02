@@ -131,18 +131,49 @@ func launchProfileDir(name string) string {
 	return filepath.Join(stateDir(), dir)
 }
 
+// cloneProfileDir is the copy of the user's real profile. Unlike a launch
+// profile it is NOT session-scoped: a clone runs to hundreds of megabytes, and
+// one per agent would multiply that for no gain. Sessions share the single
+// cloned browser and keep to their own tabs.
+func cloneProfileDir(name string) string {
+	return filepath.Join(stateDir(), "profile-"+name+"-clone")
+}
+
+// portFile records the debug port we launched a profile on. Chrome and Brave
+// often never write DevToolsActivePort, and the port remembered in the state
+// file is per-session, so a shared clone needs somewhere every session can
+// look.
+func portFile(dir string) string { return filepath.Join(dir, "use-browser-port") }
+
+func writePortFile(dir string, port int) {
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(portFile(dir), []byte(strconv.Itoa(port)), 0o644)
+}
+
+func readPortFile(dir string) string {
+	b, err := os.ReadFile(portFile(dir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
 // ownedProfile reports whether a profile directory under the state dir belongs
 // to this session, so one session never discovers another session's browser.
+// Clones are the exception: they are shared by every session.
 func ownedProfile(dirName string) bool {
 	if !strings.HasPrefix(dirName, "profile-") {
 		return false
 	}
-	base := strings.TrimSuffix(dirName, "-clone")
+	if strings.HasSuffix(dirName, "-clone") {
+		return true
+	}
+	rest := strings.TrimPrefix(dirName, "profile-")
 	if flagSession == "" {
 		// The default session owns profile-<browser> and nothing suffixed.
-		return !strings.Contains(strings.TrimPrefix(base, "profile-"), "-")
+		return !strings.Contains(rest, "-")
 	}
-	return strings.HasSuffix(base, "-"+flagSession)
+	return strings.HasSuffix(rest, "-"+flagSession)
 }
 
 // freeDebugPort returns the first port from 9222 upward that nothing is
@@ -188,7 +219,7 @@ func profileDirs() []profileDir {
 		// dedicated launch profile, cloned real profile, then the real one
 		dirs := []profileDir{
 			{launchProfileDir(pin), pin},
-			{launchProfileDir(pin) + "-clone", pin},
+			{cloneProfileDir(pin), pin},
 		}
 		if d := userDataDirs()[pin]; d != "" {
 			dirs = append(dirs, profileDir{d, pin})
@@ -475,6 +506,7 @@ func cmdLaunch(args []string) error {
 	os.MkdirAll(profile, 0o755)
 	port := freeDebugPort()
 	savePort(port)
+	writePortFile(profile, port)
 	cmd := exec.Command(b.Path,
 		"--remote-debugging-port="+strconv.Itoa(port),
 		"--user-data-dir="+profile,

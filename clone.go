@@ -367,7 +367,7 @@ func cmdClone(args []string) error {
 		fmt.Printf("ok already connected to %s (use-browser doctor for details)\n", b.Name)
 		return nil
 	}
-	if d := launchProfileDir(b.Name) + "-clone"; profileInUse(d) {
+	if d := cloneProfileDir(b.Name); profileInUse(d) {
 		return fmt.Errorf("a %s is already using %s but is not serving DevTools.\nclose that browser and run this again", b.Name, d)
 	}
 	if port == "" {
@@ -375,6 +375,7 @@ func cmdClone(args []string) error {
 	}
 	if n, err := strconv.Atoi(port); err == nil {
 		savePort(n)
+		writePortFile(cloneProfileDir(b.Name), n)
 	}
 
 	src := realUserDataDir(b.Name)
@@ -393,7 +394,7 @@ func cmdClone(args []string) error {
 			profileDir, b.Name, strings.Join(avail, ", "))
 	}
 
-	clone := launchProfileDir(b.Name) + "-clone"
+	clone := cloneProfileDir(b.Name)
 
 	needCopy := fresh
 	if _, err := os.Stat(filepath.Join(clone, profileDir)); err != nil {
