@@ -150,7 +150,14 @@ $ use-browser clone brave
 synced 42 file(s), 32.9 MB, 43 skipped        # 1.2s
 ```
 
-Modification times are preserved so the second pass has something to compare against. SQLite databases move as a group with their `-wal`/`-shm`/`-journal` sidecars, and sidecars the source has dropped are deleted from the copy — a fresh `Cookies` beside a stale journal reads as corrupt. Close the real browser first if you want a complete sync; files it holds open are skipped, and cookies are usually among them. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
+Modification times are preserved so the second pass has something to compare against. SQLite databases move as a group with their `-wal`/`-shm`/`-journal` sidecars, and sidecars the source has dropped are deleted from the copy — a fresh `Cookies` beside a stale journal reads as corrupt. Close the real browser first if you want fresh logins. On Windows a running Chromium holds `Network/Cookies` open without share-read — it cannot be copied at all, and that is the file the sessions live in:
+
+```
+$ cp ".../User Data/Default/Network/Cookies" /tmp/probe
+cp: cannot open ... for reading: Device or resource busy
+```
+
+So a sync with the browser open refreshes everything else and leaves the clone's logins at whatever they were the last time it was closed. On macOS and Linux the lock is advisory and this does not arise. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
 
 If the clone itself is running, `clone` attaches to it rather than writing into a live profile — which is also how a second session joins the first session's cloned browser. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
 

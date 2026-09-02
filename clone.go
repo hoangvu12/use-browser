@@ -423,7 +423,11 @@ func cmdClone(args []string) error {
 		// Refresh the copy so logins made in the real browser since the last
 		// clone are carried over. Only changed files move, so this is cheap.
 		if b.isRunning() {
-			fmt.Printf("warning: %s is running; files it holds open are skipped. close it for a complete sync.\n", b.Name)
+			// Not a general caveat: on Windows the cookie database is opened
+			// without share-read, so it is exactly the file that cannot be
+			// copied, and logins are exactly what the user wanted synced.
+			fmt.Printf("warning: %s is running, so its cookie database is locked and will not sync.\n", b.Name)
+			fmt.Printf("         logins in the clone stay as they were. close %s and rerun for fresh logins.\n", b.Name)
 		}
 		fmt.Printf("syncing %s -> %s ...\n", filepath.Join(src, profileDir), filepath.Join(clone, profileDir))
 		copyFile(filepath.Join(src, "Local State"), filepath.Join(clone, "Local State"))

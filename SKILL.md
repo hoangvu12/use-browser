@@ -71,8 +71,11 @@ syncing ...\\Brave-Browser\\User Data\\Default -> ...\\profile-brave-clone\\Defa
 synced 42 file(s), 32.9 MB, 43 skipped (locked or unreadable)
 ```
 
-- Tell the user to close the real browser first. Files it holds open are
-  skipped, and cookies are usually among them.
+- **Tell the user to close the real browser before syncing if they want fresh
+  logins.** On Windows the running browser holds its cookie database open
+  without share-read, so that one file cannot be copied at all — and it is the
+  file the logins live in. A sync with the browser open updates everything
+  else and leaves the clone's logins as they were.
 - `--no-sync` attaches to the existing clone unchanged. `--fresh` re-copies
   everything from scratch.
 - If the clone itself is already running, `use-browser` attaches to it instead
