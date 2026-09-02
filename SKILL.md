@@ -95,14 +95,22 @@ what you name:
 
 ```
 $ use-browser clean
-  profile-brave-clone      677.9 MB
-  profile-chrome           892.6 MB
-  total                   2080.9 MB
+  profile-brave                    66.5 MB
+  profile-brave-clone            1525.3 MB   526 MB cache  [running]
+  total                          1591.8 MB
+keep the logins, drop 526 MB of cache: use-browser clean --cache
 ```
 
 `use-browser clean <name>...` or `--all` removes them; a deleted clone is
 re-copied on the next `clone`. `BU_HOME=<dir>` moves profiles and state
 somewhere else entirely.
+
+Most of a clone's size is cache it built itself, never copied from the real
+profile. `use-browser clean --cache` deletes only those directories and keeps
+cookies, logins and history, so it is the safe thing to offer first when a
+user asks about disk. Profiles a browser is using are skipped. Syncing also
+prunes: a `clone` deletes files the real profile has dropped, so the copy
+tracks the source instead of only growing.
 
 ## Browser profiles
 
@@ -220,7 +228,7 @@ use-browser js <expr>              run JavaScript in the page
 use-browser cdp <Domain.method> [params-json]   raw DevTools call
 use-browser use [browser]          pin browser selection (`auto` clears it)
 use-browser profiles [browser]     list that browser's real profiles, for clone
-use-browser clean [name|--all]     list or delete use-browser's own profiles
+use-browser clean [name|--all|--cache]   list/delete profiles (--cache keeps logins)
 use-browser connect [browser]      attach to the user's running browser (real profile, toggle)
 use-browser clone [browser]        copy real profile & launch it debuggable (logins, no toggle)
 use-browser launch [browser]       start a browser with a dedicated automation profile

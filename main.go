@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const version = "0.5.0"
+const version = "0.5.1"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
@@ -52,6 +52,7 @@ Setup:
   use-browser use [browser]       pin which browser to drive (auto = unpin)
   use-browser profiles [browser]  list that browser's real profiles, for clone
   use-browser clean [name|--all]  list or delete use-browser's own profiles
+                                  --cache drops only caches, keeping logins
   use-browser connect [browser]   attach to your normal browser, real profile (one-time toggle)
   use-browser clone [browser]     copy your real profile & launch it debuggable (logins, no toggle)
   use-browser launch [browser]    start a browser with a dedicated automation profile
@@ -63,7 +64,8 @@ clone options: --profile "Profile 1"  pick which profile to copy | --fresh  re-c
                tabs in the clone. The only way to sync logins with no clicks:
                a running browser holds its cookie file exclusively.
 An existing clone is refreshed from your real profile on every clone command,
-so logins you have made since last time come across. Only changed files move.
+so logins you have made since last time come across. Only changed files move,
+and files your real profile has deleted are dropped from the copy.
 
 Profiles and state live in the OS cache dir; BU_HOME=<dir> moves them.
 

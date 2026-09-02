@@ -179,12 +179,17 @@ If the clone itself is running, `clone` attaches to it rather than writing into 
 
 ```
 $ use-browser clean
-  profile-brave-clone      677.9 MB
-  profile-chrome           892.6 MB
-  total                   2080.9 MB
+  profile-brave                    66.5 MB
+  profile-brave-clone            1525.3 MB   526 MB cache  [running]
+  total                          1591.8 MB
+keep the logins, drop 526 MB of cache: use-browser clean --cache
 ```
 
 `use-browser clean <name>...` or `--all` deletes them, skipping any that a browser is using. A deleted clone is re-copied on the next `clone`. `BU_HOME=<dir>` relocates profiles and state; the default is the OS cache directory.
+
+Most of a clone's growth is cache it built for itself: caches are never copied from your real profile, so they only ever grow in the copy. `use-browser clean --cache` deletes just those directories and leaves everything that carries identity — cookies, logins, history — in place. The browser rebuilds them, more slowly the first time.
+
+The rest is drift, and `sync` handles it: every `clone` now deletes files your real profile has dropped, so a copy that is synced for months does not keep every file it has ever seen. Cache directories and use-browser's own bookkeeping are exempt, since neither has a source to be missing from.
 
 ## Tabs and parallel agents
 
@@ -240,7 +245,7 @@ use-browser js <expr>                     run JavaScript in the page (js - reads
 use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
 use-browser use [browser]                 pin browser selection (`auto` clears it)
 use-browser profiles [browser]            list that browser's real profiles, for clone
-use-browser clean [name|--all]            list or delete use-browser's own profiles
+use-browser clean [name|--all|--cache]    list or delete use-browser's own profiles (--cache keeps logins)
 use-browser doctor [browser] | skill | help
 
 --tab <id>                                run one command against a tab, writing no state

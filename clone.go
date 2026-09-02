@@ -204,6 +204,8 @@ type syncStat struct {
 	Copied  int
 	Skipped int
 	Bytes   int64
+	Removed int
+	Freed   int64
 }
 
 // syncTree copies only what differs between src and dst, comparing size and
@@ -278,7 +280,57 @@ func syncTree(src, dst string) syncStat {
 			}
 		}
 	}
+	st.Removed, st.Freed = pruneTree(dst, present)
 	return st
+}
+
+// pruneKeep are files that live in the copy on purpose and have no source to
+// come from: use-browser writes the first, the browser writes the rest while
+// it runs the clone.
+var pruneKeep = map[string]bool{
+	"use-browser-port": true, "DevToolsActivePort": true, "lockfile": true,
+	"SingletonLock": true, "SingletonCookie": true, "SingletonSocket": true,
+}
+
+// pruneTree deletes files the source no longer has. A sync that only ever
+// adds leaves the clone growing forever: every file the real profile deletes
+// lives on in the copy. Cache directories are left alone -- the source never
+// had them and the clone builds its own.
+func pruneTree(dst string, present map[string]bool) (removed int, freed int64) {
+	var dirs []string
+	filepath.WalkDir(dst, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if cacheDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if path != dst {
+				dirs = append(dirs, path)
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(dst, path)
+		if err != nil || present[rel] || pruneKeep[d.Name()] {
+			return nil
+		}
+		var size int64
+		if fi, err := d.Info(); err == nil {
+			size = fi.Size()
+		}
+		if os.Remove(path) == nil {
+			removed++
+			freed += size
+		}
+		return nil
+	})
+	// Deepest first, so a directory the prune emptied goes with its contents.
+	// Remove fails on anything still occupied, which is the guard we want.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		os.Remove(dirs[i])
+	}
+	return removed, freed
 }
 
 // processAlive reports whether a pid is still running.
@@ -504,12 +556,15 @@ func cmdClone(args []string) error {
 		copyFile(filepath.Join(src, "Local State"), filepath.Join(clone, "Local State"))
 		st := syncTree(filepath.Join(src, profileDir), filepath.Join(clone, profileDir))
 		switch {
-		case st.Copied == 0:
+		case st.Copied == 0 && st.Removed == 0:
 			fmt.Println("already up to date")
 		default:
 			fmt.Printf("synced %d file(s), %.1f MB", st.Copied, float64(st.Bytes)/(1024*1024))
 			if st.Skipped > 0 {
 				fmt.Printf(", %d skipped (locked or unreadable)", st.Skipped)
+			}
+			if st.Removed > 0 {
+				fmt.Printf(", pruned %d file(s), %.1f MB freed", st.Removed, float64(st.Freed)/(1024*1024))
 			}
 			fmt.Println()
 		}
