@@ -530,6 +530,88 @@ func cmdLaunch(args []string) error {
 	return fmt.Errorf("%s started (pid %d) but the DevTools endpoint never came up on :%d", b.Name, cmd.Process.Pid, port)
 }
 
+// ownedEndpointInDir resolves only an endpoint backed by a profile directory
+// use-browser owns. Real profiles and remote endpoints are never candidates.
+func ownedEndpointInDir(dir string) string {
+	if p := readPortFile(dir); p != "" {
+		if ws := versionWS("http://127.0.0.1:" + p); ws != "" {
+			return ws
+		}
+	}
+	port, wsPath := activePort(dir)
+	if port == "" {
+		return ""
+	}
+	if ws := versionWS("http://127.0.0.1:" + port); ws != "" {
+		return ws
+	}
+	if wsPath != "" && portAlive(port) {
+		return "ws://127.0.0.1:" + port + wsPath
+	}
+	return ""
+}
+
+// cmdStop gracefully closes an owned launch or clone and preserves its
+// on-disk profile for the next job.
+func cmdStop(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("usage: use-browser stop [browser]")
+	}
+	name := ""
+	if len(args) == 1 {
+		name = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+	b, err := findBrowser(name)
+	if err != nil {
+		return err
+	}
+
+	type owned struct {
+		kind string
+		dir  string
+		ws   string
+	}
+	var live []owned
+	for _, candidate := range []owned{
+		{kind: "launch", dir: launchProfileDir(b.Name)},
+		{kind: "clone", dir: cloneProfileDir(b.Name)},
+	} {
+		if candidate.ws = ownedEndpointInDir(candidate.dir); candidate.ws != "" {
+			live = append(live, candidate)
+		}
+	}
+	if len(live) == 0 {
+		clearConnectionState()
+		fmt.Printf("ok %s already stopped\n", b.Name)
+		return nil
+	}
+	if len(live) > 1 {
+		return fmt.Errorf("more than one owned %s browser is running; stop the extra instance before retrying", b.Name)
+	}
+
+	ws, err := wsDial(live[0].ws, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to owned %s %s: %v", b.Name, live[0].kind, err)
+	}
+	c := &cdpClient{ws: ws}
+	_, callErr := c.browserCall("Browser.close", nil)
+	c.Close()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if ownedEndpointInDir(live[0].dir) == "" && !profileInUse(live[0].dir) {
+			clearConnectionState()
+			fmt.Printf("ok %s %s stopped; profile kept at %s\n", b.Name, live[0].kind, live[0].dir)
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if callErr != nil {
+		return fmt.Errorf("stop %s %s: %v", b.Name, live[0].kind, callErr)
+	}
+	return fmt.Errorf("%s %s did not stop within 15s", b.Name, live[0].kind)
+}
+
 // cmdUse pins the browser that every later command talks to, so a second
 // Chromium being open (or open first) can't hijack the connection.
 func cmdUse(args []string) error {

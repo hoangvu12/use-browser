@@ -730,3 +730,10 @@ func savePort(port int) {
 	st.Port = port
 	saveState(st)
 }
+
+func clearConnectionState() {
+	st := loadState()
+	st.Target = ""
+	st.Port = 0
+	saveState(st)
+}

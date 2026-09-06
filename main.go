@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const version = "0.5.1"
+const version = "0.6.0"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
@@ -56,6 +56,7 @@ Setup:
   use-browser connect [browser]   attach to your normal browser, real profile (one-time toggle)
   use-browser clone [browser]     copy your real profile & launch it debuggable (logins, no toggle)
   use-browser launch [browser]    start a browser with a dedicated automation profile
+  use-browser stop [browser]      gracefully stop an owned launch/clone; keep its profile
   use-browser doctor [browser]    list installed browsers, diagnose the connection
 
 clone options: --profile "Profile 1"  pick which profile to copy | --fresh  re-copy
@@ -183,6 +184,12 @@ func main() {
 		return
 	case "clone":
 		if err := cmdClone(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "stop":
+		if err := cmdStop(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

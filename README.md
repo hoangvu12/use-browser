@@ -71,6 +71,17 @@ use-browser launch brave
 
 This starts the browser you name (or the first one detected) with a dedicated empty profile stored next to the CLI's state. Logins you make there stick around for future runs, and your day-to-day browser never sees any of it.
 
+### Job lifecycle
+
+Use `launch` when a task does not need the user's real cookies or logins. Use
+`clone` only when it does. A clone has one reusable slot per browser: the first
+use copies it, later uses sync only changes, and changing `--profile` rebuilds
+that slot so source profiles never mix.
+
+End either owned-browser workflow with `use-browser stop`. It gracefully closes
+the launch or clone and keeps its profile on disk for the next job. It never
+closes a real profile attached through `connect` or a remote `BU_CDP_URL`.
+
 `BU_CDP_URL` points the CLI at any other DevTools endpoint, including a remote or cloud browser.
 
 ## How it works
@@ -246,6 +257,7 @@ use-browser cdp <Domain.method> [json]    raw DevTools call for anything not cov
 use-browser use [browser]                 pin browser selection (`auto` clears it)
 use-browser profiles [browser]            list that browser's real profiles, for clone
 use-browser clean [name|--all|--cache]    list or delete use-browser's own profiles (--cache keeps logins)
+use-browser stop [browser]                stop an owned launch/clone, keep its profile
 use-browser doctor [browser] | skill | help
 
 --tab <id>                                run one command against a tab, writing no state

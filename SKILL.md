@@ -40,6 +40,19 @@ If a command fails to connect, run `use-browser doctor`. It lists installed brow
 - `use-browser connect [browser]` attaches to the user's already-running browser with their real profile. **Use this only when the user is at the keyboard, and prefer `clone` otherwise.** On Chrome and Brave 144+ the "Allow remote debugging?" dialog is **per connection, not per session**: an accepted click buys exactly one connection, and the next invocation prompts again. `use-browser` opens one connection per invocation, so unattended work is impossible in this mode. Batch mode is the only lever - one invocation is one connection, so a whole task costs one click. The user must enable the toggle themselves; never flip security toggles on their behalf.
 - `use-browser launch [chrome|brave|edge|...]` starts a detected browser with a dedicated empty automation profile, isolated from the user's own browsing. Logins made in it persist between runs.
 
+## Choose the lightest browser lifecycle
+
+Use `launch` for tasks that do not need the user's real cookies or logins. Use
+`clone` only when real-profile state is required. A clone has one reusable slot
+per browser: first use copies it, later uses incrementally refresh it, and a
+different `--profile` rebuilds the slot so source profiles never mix.
+
+At the end of a job started by `launch` or `clone`, run `use-browser stop
+[browser]`. Completion criterion: it prints `ok ... stopped`; the browser is
+closed and its persistent profile remains for the next job. `stop` affects only
+use-browser-owned browsers, never a real profile attached by `connect` or a
+remote endpoint.
+
 If `use-browser` is not on PATH, install it first:
 
 - Windows: `irm https://raw.githubusercontent.com/hoangvu12/use-browser/main/install.ps1 | iex`
@@ -232,6 +245,7 @@ use-browser clean [name|--all|--cache]   list/delete profiles (--cache keeps log
 use-browser connect [browser]      attach to the user's running browser (real profile, toggle)
 use-browser clone [browser]        copy real profile & launch it debuggable (logins, no toggle)
 use-browser launch [browser]       start a browser with a dedicated automation profile
+use-browser stop [browser]         stop an owned launch/clone and keep its profile
 use-browser doctor [browser]       list browsers and verify the requested pin
 
 --tab <id>                         run one command against a tab, no state written

@@ -98,3 +98,17 @@ func TestSyncTreeDropsOrphanSidecar(t *testing.T) {
 		t.Error("Cookies-wal: orphan journal survived the sync")
 	}
 }
+
+func TestCloneMetadataRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeCloneMetadata(dir, "brave", "Profile 1"); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := readCloneMetadata(dir)
+	if !ok {
+		t.Fatal("clone metadata was not readable")
+	}
+	if meta.Browser != "brave" || meta.SourceProfile != "Profile 1" {
+		t.Fatalf("metadata = %#v", meta)
+	}
+}

@@ -26,6 +26,32 @@ import (
 	"time"
 )
 
+type cloneMetadata struct {
+	Browser       string `json:"browser"`
+	SourceProfile string `json:"sourceProfile"`
+}
+
+func cloneMetadataPath(dir string) string {
+	return filepath.Join(dir, "use-browser-clone.json")
+}
+
+func readCloneMetadata(dir string) (cloneMetadata, bool) {
+	var meta cloneMetadata
+	b, err := os.ReadFile(cloneMetadataPath(dir))
+	if err != nil || json.Unmarshal(b, &meta) != nil {
+		return cloneMetadata{}, false
+	}
+	return meta, true
+}
+
+func writeCloneMetadata(dir, browserName, profileDir string) error {
+	b, err := json.Marshal(cloneMetadata{Browser: browserName, SourceProfile: profileDir})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cloneMetadataPath(dir), b, 0o644)
+}
+
 // realUserDataDir returns the user-data-dir of a browser's normal install,
 // i.e. the directory that holds "Local State" and the profile subdirectories.
 func realUserDataDir(name string) string {
@@ -493,6 +519,11 @@ func cmdClone(args []string) error {
 	}
 
 	clone := cloneProfileDir(b.Name)
+	if meta, ok := readCloneMetadata(clone); ok && (meta.Browser != b.Name || meta.SourceProfile != profileDir) {
+		fmt.Printf("source profile changed from %s/%s to %s/%s; rebuilding the single clone slot ...\n",
+			meta.Browser, meta.SourceProfile, b.Name, profileDir)
+		fresh = true
+	}
 
 	// The running browser holds its cookie database exclusively on Windows,
 	// and that is the one file the logins live in. Closing it first is the
@@ -568,6 +599,10 @@ func cmdClone(args []string) error {
 			}
 			fmt.Println()
 		}
+	}
+
+	if err := writeCloneMetadata(clone, b.Name, profileDir); err != nil {
+		return fmt.Errorf("record clone source: %v", err)
 	}
 
 	cloneArgs := []string{
