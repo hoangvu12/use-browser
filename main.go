@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
@@ -26,6 +26,12 @@ Actions:
   use-browser type <text>           type into the focused element
   use-browser key <key>             Enter, Tab, esc, down, ctrl+a, shift+Tab ...
   use-browser scroll [down|up|top|bottom|<px>]
+
+Fast lane (bounded tasks, needs TYPESAFE_API_KEY):
+  use-browser run "<goal>"           Jev closed loop: picks every step itself, stops at
+                                    login/payment pages and hands back to you.
+                                    Text values come from quoted strings in the goal
+                                    or --set <text>; [--max-steps N] (default 25)
 
 Tabs (the ids are stable, the 1..N indexes are not):
   use-browser tabs                  list tabs -> 2* a1b2c3d4 "title" url
@@ -141,7 +147,8 @@ func parseGlobalFlags(args []string) ([]string, error) {
 
 // commands that need a page connection
 var pageCommands = map[string]func(*cdpClient, []string) error{
-	"nav": cmdNav, "snap": cmdSnap, "find": cmdFind, "click": cmdClick, "fill": cmdFill,
+	"nav": cmdNav, "snap": cmdSnap, "find": cmdFind, "run": cmdRun,
+	"click": cmdClick, "fill": cmdFill,
 	"type": cmdType, "key": cmdKey, "scroll": cmdScroll, "text": cmdText,
 	"js": cmdJS, "shot": cmdShot, "cdp": cmdCDP,
 	"tabs": cmdTabs, "tab": cmdTab, "open": cmdOpen, "close": cmdClose,

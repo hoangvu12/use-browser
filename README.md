@@ -101,6 +101,8 @@ The agent acts by index: `use-browser click 17`, `use-browser fill 4 "query"`. E
 
 When a page has hundreds of elements, the snapshot itself becomes the expensive part. `find` (0.7.0) outsources the picking: it snaps internally, sends the indexed lines to Jev — [TypeSafe](https://typesafe.ai)'s decision model — in one request, and prints the pick with its probability, confidence, and an existence check. `find "accept cookies" --click` acts on a confident pick and nothing else; a weak match prints the top candidates and falls back to the same snap-the-page-yourself path a stale index takes.
 
+`run` (0.8.0) is the fast lane for bounded tasks — a Jev closed loop in the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) shape: one request per step picks the operation (click / type / scroll / wait / done / blocked) and, speculatively, the target element and which supplied text value belongs in it. `run "fill the order form and submit it" --set "Nguyen Vu"` executes the whole flow in seconds where an agent would spend a dozen round trips. Two gates keep it honest: it stops and hands back at login/password/payment pages (never feed it credentials — Jev does not generate text anyway, values come from quoted strings in the goal or `--set`), and `done` only counts when a separate Jev check sees visible evidence the goal is met. Anything needing judgment, novel pages, or credentials stays with the agent and snap/click.
+
 The key is the opt-in signal. Set it up once with:
 
 ```
@@ -255,6 +257,8 @@ use-browser nav <url>                     navigate and wait for load
 use-browser snap [--max N]                indexed interactive elements
 use-browser find "<what>"                 Jev (TypeSafe) picks the element [--click | --fill <text>]
                                           needs TYPESAFE_API_KEY; weak match -> candidates + snap hint
+use-browser run "<goal>"                  Jev closed loop for bounded tasks [--set <text>]... [--max-steps N]
+                                          stops at login/payment pages, done needs visible evidence
 use-browser text [--max N]                readable page text, capped at 4000 chars by default
 use-browser click <i | x,y>               click an element index or coordinates [--double --right]
 use-browser fill <i> <text>               focus element i and replace its value

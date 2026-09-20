@@ -406,6 +406,13 @@ func (c *cdpClient) attach(targetID string) error {
 	c.sessionID = r.SessionID
 	c.targetID = targetID
 	c.stale = ""
+	// Focus emulation: when the window is occluded or the tab backgrounded,
+	// Chrome throttles the renderer and silently drops synthetic input —
+	// Runtime.evaluate keeps working, so evals (find, fill via insertText)
+	// succeed while clicks and keys vanish. Forcing focus keeps the input
+	// pipeline alive for unattended runs. Errors are ignored: old browsers
+	// without the domain, internal pages, whatever — the commands still work.
+	c.rpc("Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, c.sessionID, defaultTimeout)
 	return nil
 }
 

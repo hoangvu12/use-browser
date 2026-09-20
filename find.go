@@ -217,11 +217,25 @@ type tsResponse struct {
 	} `json:"answers"`
 }
 
-// tsCall posts one System One request. Rate limits (429/529) and transport
-// errors get a single retry; the API is small enough that nothing fancier is
-// warranted.
+// tsCall posts one System One request and parses the typed response.
 func tsCall(key string, req tsRequest) (*tsResponse, error) {
-	body, err := json.Marshal(req)
+	b, err := tsCallRaw(key, req)
+	if err != nil {
+		return nil, err
+	}
+	var out tsResponse
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("bad response: %v", err)
+	}
+	return &out, nil
+}
+
+// tsCallRaw posts one System One request and returns the raw response body,
+// for callers (run) that need answers under their own keys. Rate limits
+// (429/529) and transport errors get a single retry; the API is small enough
+// that nothing fancier is warranted.
+func tsCallRaw(key string, payload any) ([]byte, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -249,11 +263,7 @@ func tsCall(key string, req tsRequest) (*tsResponse, error) {
 			return nil, err
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			var out tsResponse
-			if err := json.Unmarshal(b, &out); err != nil {
-				return nil, fmt.Errorf("bad response: %v", err)
-			}
-			return &out, nil
+			return b, nil
 		}
 		if (resp.StatusCode == 429 || resp.StatusCode == 529) && attempt == 0 {
 			continue

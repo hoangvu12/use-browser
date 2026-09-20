@@ -110,6 +110,37 @@ as a stale index (`run: use-browser snap`) — fall back to snap and pick
 yourself. Describe the control, not the goal ("the email input", not "log me
 in") — Jev reads the description literally.
 
+## run: the fast lane for bounded tasks (Jev closed loop)
+
+`run` keeps the wheel for a whole bounded task while you wait — one Jev
+request per step picks the operation and the element, so a ten-step flow
+completes in seconds instead of ten agent round trips:
+
+```bash
+use-browser run "open the Wikipedia article about Gödel's incompleteness theorems"
+use-browser run "fill the order form and submit it" --set "Nguyen Vu" --set "vu@example.com"
+```
+
+**The right task:** one goal, a known site, click/type/scroll steps, no
+credentials. **The wrong task:** novel pages needing judgment, multi-tab
+flows, downloads, anything involving sign-in or payment — drive those
+yourself with snap/click.
+
+Text values come from you, because Jev does not generate text: quoted
+strings inside the goal, or `--set <text>` — Jev matches each value to the
+right field every step. On PowerShell prefer `--set`; inline double quotes
+in the goal get mangled.
+
+The loop keeps itself honest and hands back:
+
+- `ok stopped at step N: login/password/payment page (danger=…)` — a
+  credentials or payment page. Take over with snap; never give run
+  credentials.
+- `ok done (achieved=…)` — only printed when a separate Jev check sees
+  visible evidence the whole goal is met.
+- `error: run: blocked …` or the `--max-steps` cap (default 25) — it cannot
+  progress. Take over with snap.
+
 ## Keeping a clone current
 
 A clone is a copy, so it drifts from the real profile. Every `use-browser clone
@@ -267,6 +298,8 @@ use-browser snap [--max N]         indexed interactive elements
 use-browser find "<what>"          Jev (TypeSafe) picks the element [--click | --fill <text>]
                                     needs a key: use-browser apikey set; weak match -> candidates
                                     + snap fallback
+use-browser run "<goal>"           Jev closed loop for bounded tasks [--set <text>]... [--max-steps N]
+                                    fast lane; stops at login/payment pages and hands back
 use-browser apikey set <key>       store the TypeSafe API key for find (show | clear; - reads stdin)
 use-browser text [--max N]         readable page text (default cap 4000 chars)
 use-browser click <i | x,y>        click element index or coordinates [--double --right]
@@ -312,6 +345,7 @@ Pass JavaScript on stdin with `js -` whenever the expression contains quotes; sh
 - `click` warns when the target point is covered, for example `(point is covered by <div cookie-banner>)`. Handle the overlay before retrying.
 - Stop and ask the user at login walls. Never enter credentials the user did not provide in this session.
 - `find` (Jev) follows the key: with a TypeSafe key configured (`use-browser apikey show`), prefer find for element picking; without one, snap and pick indexes yourself and don't suggest Jev unless the user asks.
+- `run` is for bounded tasks on known pages — one goal, click/type/scroll, no credentials. It stops itself at login/payment pages and hands back; take over with snap instead of feeding it credentials.
 - Errors go to stderr as `error: ...` with exit code 1.
 - Tab positions from `tabs` are unstable; the 8-character id is not. Hold ids, never positions.
 - Never pick a browser for the user when `use-browser` says two are debuggable. Pin the one they named, or ask.

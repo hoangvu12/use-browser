@@ -18,7 +18,8 @@ import (
 const snapJS = `(() => {
 const out = [], refs = [];
 const ROLES = new Set(['button','link','tab','menuitem','menuitemcheckbox','menuitemradio','checkbox','radio','combobox','listbox','switch','option','searchbox','textbox','slider','spinbutton']);
-function inter(e) {
+// tag/role/attribute qualifications — the DOM says what these are
+function qualified(e) {
   const t = e.tagName;
   if (t === 'A') return e.hasAttribute('href');
   if (t === 'BUTTON' || t === 'SELECT' || t === 'TEXTAREA' || t === 'SUMMARY') return true;
@@ -27,6 +28,41 @@ function inter(e) {
   if (r && ROLES.has(r)) return true;
   if (e.hasAttribute('onclick') || e.hasAttribute('jsaction')) return true;
   if (e.isContentEditable && !(e.parentElement && e.parentElement.isContentEditable)) return true;
+  return false;
+}
+// React attaches click handlers without leaving any DOM trace — no onclick
+// attribute, no role, no href (BHX's category menu is pure div.cate). The
+// pointer cursor is the only visible tell, so it counts as interactivity —
+// unless the whole page is pointer (some stylesheets do that), which makes
+// the signal meaningless.
+function pointerInteractive(e) {
+  const w = e.ownerDocument.defaultView;
+  if (w.__buPtrOK === undefined) {
+    w.__buPtrOK = w.document.body && w.getComputedStyle(w.document.body).cursor !== 'pointer';
+  }
+  return w.__buPtrOK && w.getComputedStyle(e).cursor === 'pointer';
+}
+function inter(e) { return qualified(e) || pointerInteractive(e); }
+// does this subtree contain a pointer-cursor element?
+function hasPointer(e) {
+  if (getComputedStyle(e).cursor === 'pointer') return true;
+  for (const ch of e.children) if (hasPointer(ch)) return true;
+  return false;
+}
+// Clipped by an overflow ancestor (collapsed accordions, inner scroll panels):
+// the element has a rect but is not really on screen, and clicks on it land
+// on whatever is stacked on top instead. The page-level viewport is exempt —
+// page scroll is the CLI's own scroll command's job.
+function clipped(e, r) {
+  let p = e.parentElement;
+  while (p && p !== document.body && p !== document.documentElement) {
+    const s = getComputedStyle(p);
+    if (s.overflow !== 'visible' || s.overflowY !== 'visible' || s.overflowX !== 'visible') {
+      const pr = p.getBoundingClientRect();
+      if (r.bottom <= pr.top + 1 || r.top >= pr.bottom - 1 || r.right <= pr.left + 1 || r.left >= pr.right - 1) return true;
+    }
+    p = p.parentElement;
+  }
   return false;
 }
 function lbl(e) {
@@ -41,10 +77,19 @@ function lbl(e) {
 function push(e) {
   // dedupe obvious nesting noise: span inside button, img inside a, ...
   if (e.parentElement && e.parentElement.closest('a,button,select,summary,[role="button"],[role="link"]')) return;
+  // cursor-pointer elements: long text means container (not a control), and
+  // any pointer descendant means this is a wrapper — in both cases let the
+  // real leaf controls surface instead. The click still lands: events bubble.
+  if (!qualified(e)) {
+    if ((e.innerText || '').trim().length > 80) return;
+    for (const r of refs) if (r.contains(e)) return;
+    for (const ch of e.children) if (hasPointer(ch)) return;
+  }
   const r = e.getBoundingClientRect();
   if (r.width < 1 || r.height < 1) return;
   const s = e.ownerDocument.defaultView.getComputedStyle(e);
   if (s.visibility === 'hidden' || s.display === 'none' || +s.opacity === 0) return;
+  if (clipped(e, r)) return;
   let d = '<' + e.tagName.toLowerCase();
   if (e.tagName === 'INPUT') d += ':' + (e.type || 'text');
   const role = e.getAttribute('role');
