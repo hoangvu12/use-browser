@@ -7,12 +7,15 @@ import (
 	"strings"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
 Page state:
   use-browser snap [--max N]        indexed interactive elements  ->  [5]<button> "Sign in"
+  use-browser find "<what>"         Jev (TypeSafe) picks the element; needs TYPESAFE_API_KEY
+                                    [--click | --fill <text>] acts on a confident pick,
+                                    otherwise prints candidates + the snap fallback
   use-browser text [--max N]        readable page text (truncated)
   use-browser shot [path] [--full]  screenshot PNG -> file path
 
@@ -50,6 +53,10 @@ Batch (one invocation, one connection):
 
 Setup:
   use-browser use [browser]       pin which browser to drive (auto = unpin)
+  use-browser apikey set <key>    store the TypeSafe API key that powers find
+                                    (from console.typesafe.ai; apikey set - reads
+                                    stdin; apikey show | clear manage it; env
+                                    TYPESAFE_API_KEY overrides the stored key)
   use-browser profiles [browser]  list that browser's real profiles, for clone
   use-browser clean [name|--all]  list or delete use-browser's own profiles
                                   --cache drops only caches, keeping logins
@@ -134,7 +141,7 @@ func parseGlobalFlags(args []string) ([]string, error) {
 
 // commands that need a page connection
 var pageCommands = map[string]func(*cdpClient, []string) error{
-	"nav": cmdNav, "snap": cmdSnap, "click": cmdClick, "fill": cmdFill,
+	"nav": cmdNav, "snap": cmdSnap, "find": cmdFind, "click": cmdClick, "fill": cmdFill,
 	"type": cmdType, "key": cmdKey, "scroll": cmdScroll, "text": cmdText,
 	"js": cmdJS, "shot": cmdShot, "cdp": cmdCDP,
 	"tabs": cmdTabs, "tab": cmdTab, "open": cmdOpen, "close": cmdClose,
@@ -208,6 +215,12 @@ func main() {
 		return
 	case "connect":
 		if err := cmdConnect(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "apikey":
+		if err := cmdAPIKey(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

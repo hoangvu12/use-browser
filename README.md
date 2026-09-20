@@ -99,6 +99,18 @@ https://news.ycombinator.com/ "Hacker News" scroll=0+485/1249
 
 The agent acts by index: `use-browser click 17`, `use-browser fill 4 "query"`. Element references live in the page itself (a `window.__bu` array), so an index from a previous invocation still resolves to the live element. When the page has navigated or the element is gone, the command fails with a message telling the agent to snap again. Screenshots exist (`use-browser shot`) but are the fallback for canvas apps and visual questions, not the default way to see a page.
 
+When a page has hundreds of elements, the snapshot itself becomes the expensive part. `find` (0.7.0) outsources the picking: it snaps internally, sends the indexed lines to Jev — [TypeSafe](https://typesafe.ai)'s decision model — in one request, and prints the pick with its probability, confidence, and an existence check. `find "accept cookies" --click` acts on a confident pick and nothing else; a weak match prints the top candidates and falls back to the same snap-the-page-yourself path a stale index takes.
+
+The key is the opt-in signal. Set it up once with:
+
+```
+use-browser apikey set <key>   # key from https://console.typesafe.ai
+use-browser apikey show        # masked — the full key never prints
+use-browser apikey clear
+```
+
+It is stored in use-browser's state dir (not the environment; `apikey set -` reads it from stdin if you'd rather keep it out of shell history), and `TYPESAFE_API_KEY` overrides it when set, for CI. With a key configured, agents prefer `find` for element picking; without one they use `snap` as always, and nothing in use-browser ever calls TypeSafe unless `find` runs.
+
 There is deliberately no daemon. browser-use runs one to keep its CDP connection and session state alive between invocations. In Go, opening a fresh WebSocket to Chrome costs around 10 ms, so each command just connects, acts, and exits. The only persistent state is the current tab id in a small JSON file.
 
 ## Choosing a browser
@@ -241,6 +253,8 @@ When the remembered tab is gone, page commands fail with `current tab <id> is go
 ```
 use-browser nav <url>                     navigate and wait for load
 use-browser snap [--max N]                indexed interactive elements
+use-browser find "<what>"                 Jev (TypeSafe) picks the element [--click | --fill <text>]
+                                          needs TYPESAFE_API_KEY; weak match -> candidates + snap hint
 use-browser text [--max N]                readable page text, capped at 4000 chars by default
 use-browser click <i | x,y>               click an element index or coordinates [--double --right]
 use-browser fill <i> <text>               focus element i and replace its value
@@ -255,7 +269,8 @@ use-browser close [id]                    close the current tab, or the one name
 use-browser js <expr>                     run JavaScript in the page (js - reads stdin)
 use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
 use-browser use [browser]                 pin browser selection (`auto` clears it)
-use-browser profiles [browser]            list that browser's real profiles, for clone
+use-browser apikey set <key>              store the TypeSafe API key for find (show | clear; - reads stdin)
+use-browser profiles [browser]            list real profiles, for clone
 use-browser clean [name|--all|--cache]    list or delete use-browser's own profiles (--cache keeps logins)
 use-browser stop [browser]                stop an owned launch/clone, keep its profile
 use-browser doctor [browser] | skill | help

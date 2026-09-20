@@ -72,6 +72,44 @@ If `use-browser` is not on PATH, install it first:
 
 Take a screenshot only when text output cannot answer the question (canvas apps, maps, visual layout): `use-browser shot` prints a PNG path to view.
 
+## find: Jev element picking (when a TypeSafe key is configured)
+
+With a TypeSafe API key configured, `find` has Jev — TypeSafe's decision
+model — pick the element from an internal snapshot, so a 150-element snap
+never enters the conversation:
+
+```bash
+use-browser find "sign in button"            # prints the match + p/conf/exists
+use-browser find "accept all cookies" --click
+use-browser find "email" --fill "user@example.com"
+```
+
+**When a key is configured, prefer find for element picking** — it is cheaper
+than pulling a snapshot into context and acts only on confident picks. When
+no key is configured, do not use find and do not suggest Jev unless the user
+asks; snap and act on indexes as usual, exactly as without this feature.
+Check with `use-browser apikey show` when unsure.
+
+Setting a key up (only when the user wants Jev-powered picking): ask for
+their key from https://console.typesafe.ai, then store it —
+
+```bash
+use-browser apikey set <key>    # or: echo <key> | use-browser apikey set -
+use-browser apikey show         # masked, never the full key
+use-browser apikey clear
+```
+
+The key lives in use-browser's state dir, not the environment, and
+`TYPESAFE_API_KEY` overrides it when set (CI). The user providing a key in
+the conversation is permission to store and use it; never put a key in a
+file you commit.
+
+The printed index is a real snap index, valid for later `click`/`fill`. A
+weak or missing match prints the top candidates and fails with the same hint
+as a stale index (`run: use-browser snap`) — fall back to snap and pick
+yourself. Describe the control, not the goal ("the email input", not "log me
+in") — Jev reads the description literally.
+
 ## Keeping a clone current
 
 A clone is a copy, so it drifts from the real profile. Every `use-browser clone
@@ -226,6 +264,10 @@ Execution stops at the first error and prints the failing line number. Snap firs
 ```
 use-browser nav <url>              navigate current tab, wait for load
 use-browser snap [--max N]         indexed interactive elements
+use-browser find "<what>"          Jev (TypeSafe) picks the element [--click | --fill <text>]
+                                    needs a key: use-browser apikey set; weak match -> candidates
+                                    + snap fallback
+use-browser apikey set <key>       store the TypeSafe API key for find (show | clear; - reads stdin)
 use-browser text [--max N]         readable page text (default cap 4000 chars)
 use-browser click <i | x,y>        click element index or coordinates [--double --right]
 use-browser fill <i> <text>        focus element i and replace its value
@@ -269,6 +311,7 @@ Pass JavaScript on stdin with `js -` whenever the expression contains quotes; sh
 
 - `click` warns when the target point is covered, for example `(point is covered by <div cookie-banner>)`. Handle the overlay before retrying.
 - Stop and ask the user at login walls. Never enter credentials the user did not provide in this session.
+- `find` (Jev) follows the key: with a TypeSafe key configured (`use-browser apikey show`), prefer find for element picking; without one, snap and pick indexes yourself and don't suggest Jev unless the user asks.
 - Errors go to stderr as `error: ...` with exit code 1.
 - Tab positions from `tabs` are unstable; the 8-character id is not. Hold ids, never positions.
 - Never pick a browser for the user when `use-browser` says two are debuggable. Pin the one they named, or ask.

@@ -455,6 +455,11 @@ func cmdDoctor(args []string) error {
 	} else if os.Getenv("BU_BROWSER") != "" {
 		fmt.Printf("pinned: %s (from BU_BROWSER)\n", pin)
 	}
+	if src := keySource(); src != "" {
+		fmt.Printf("typesafe key: %s (find available)\n", src)
+	} else {
+		fmt.Println("typesafe key: none (find falls back to snap; use-browser apikey set <key>)")
+	}
 	e, err := discover()
 	if err != nil {
 		fmt.Println("browser: NOT CONNECTED")
