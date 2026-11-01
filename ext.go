@@ -414,12 +414,12 @@ func cmdExt(args []string) error {
 	case "uninstall":
 		return extUninstall()
 	case "status":
-		return extStatus()
+		return extStatus(args)
 	case "path":
 		fmt.Println(extensionDir())
 		return nil
 	}
-	return fmt.Errorf("usage: use-browser ext [install [browser] [--no-wait] | status | path | uninstall]")
+	return fmt.Errorf("usage: use-browser ext [install [browser] [--no-wait] | status [browser] | path | uninstall]")
 }
 
 func extensionDir() string { return filepath.Join(stateDir(), "extension") }
@@ -531,29 +531,36 @@ func extInstall(args []string) error {
 	pinBrowser(b.Name)
 	fmt.Printf("ok native host registered (%s)\n", exe)
 
-	if bridgeFor(b.Name) != nil {
-		fmt.Printf("ok %s already has the extension running (reload it at %s://extensions if you updated use-browser)\n", b.Name, schemeFor(b.Name))
+	if br := bridgeFor(b.Name); br != nil {
+		fmt.Printf("ok %s is already connected through the extension\n", b.Name)
+		if br.Version != bundledExtVersion() {
+			fmt.Printf("the loaded extension is v%s and this use-browser carries v%s. Tell the user:\n  %s\n", br.Version, bundledExtVersion(), reloadStep(b.Name))
+		}
 		return nil
 	}
 
 	// 4. The one step only a human can do: load it into the real profile.
-	if !wait {
-		fmt.Printf("load it once in %s: %s://extensions -> Developer mode -> Load unpacked -> %s\n", b.Name, schemeFor(b.Name), dir)
-		return nil
-	}
-	// Browsers refuse to open their internal pages from the command line
-	// (Brave shows its start page instead), so the user types the address.
-	// The folder goes on the clipboard for the file picker.
+	// Browsers refuse to open their own pages from the command line (Brave
+	// shows its start page instead), but an https page opens fine, so the
+	// browser gets the guide and the file picker gets the path.
 	clip := ""
 	if copyToClipboard(dir) == nil {
-		clip = "   (path is on your clipboard)"
+		clip = " (the folder path is on the clipboard)"
 	}
-	fmt.Printf(`load the extension once in %s:
-  1. open %s://extensions in the address bar
-  2. turn on "Developer mode" (top right)
-  3. "Load unpacked" -> %s%s
-waiting up to 5 minutes for it to connect...
-`, b.Name, schemeFor(b.Name), dir, clip)
+	opened := exec.Command(b.Path, guideURL).Start() == nil
+
+	// An agent ran this: it cannot click, and its user cannot see this
+	// output. Hand it the words to relay and the command that confirms them,
+	// instead of blocking its shell for five minutes.
+	if !wait || !stdoutIsTerminal() {
+		fmt.Printf("ok extension written to %s%s\n", dir, clip)
+		if opened {
+			fmt.Printf("ok opened the setup guide in %s: %s\n", b.Name, guideURL)
+		}
+		fmt.Printf("only the user can do the last step, once. Tell them:\n%s\nthen run: use-browser ext status %s   (exit 0 once it is connected)\n", loadSteps(b.Name), b.Name)
+		return nil
+	}
+	fmt.Printf("load the extension once%s:\n%s\nwaiting up to 5 minutes for it to connect...\n", clip, loadSteps(b.Name))
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		if br := bridgeFor(b.Name); br != nil {
@@ -562,7 +569,41 @@ waiting up to 5 minutes for it to connect...
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("the extension did not connect. Once it is loaded, check: use-browser ext status")
+	return fmt.Errorf("the extension did not connect. Find out why: use-browser ext status %s", b.Name)
+}
+
+const guideURL = "https://github.com/hoangvu12/use-browser#set-up-the-extension"
+
+var displayNames = map[string]string{
+	"chrome": "Chrome", "brave": "Brave", "edge": "Edge",
+	"chromium": "Chromium", "vivaldi": "Vivaldi", "opera": "Opera",
+}
+
+// loadSteps is the manual step, worded for a person: an agent pastes it as is.
+func loadSteps(name string) string {
+	return fmt.Sprintf(`  1. In %s, type %s://extensions in the address bar
+  2. Turn on "Developer mode" (top right)
+  3. Click "Load unpacked" and choose this folder:
+     %s`, displayNames[name], schemeFor(name), extensionDir())
+}
+
+func reloadStep(name string) string {
+	return fmt.Sprintf(`in %s, open %s://extensions and click the reload icon on "use-browser bridge"`, displayNames[name], schemeFor(name))
+}
+
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// bundledExtVersion is the version of the extension embedded in this binary.
+func bundledExtVersion() string {
+	b, _ := extensionFiles.ReadFile("extension/manifest.json")
+	var m struct {
+		Version string `json:"version"`
+	}
+	json.Unmarshal(b, &m)
+	return m.Version
 }
 
 func copyToClipboard(s string) error {
@@ -596,21 +637,164 @@ func schemeFor(name string) string {
 	return "chrome"
 }
 
-func extStatus() error {
-	bridges := liveBridges()
-	if len(bridges) == 0 {
-		fmt.Println("extension: no browser has the use-browser bridge running")
-		if _, err := os.Stat(hostManifestPath()); err != nil {
-			fmt.Println("native host: not registered (run: use-browser ext install [browser])")
-		} else {
-			fmt.Printf("native host: registered; load %s as an unpacked extension, or click its icon if it shows OFF\n", extensionDir())
+// extStatus says whether a browser is reachable through the extension and,
+// when it is not, exactly which step is missing and what to tell the user.
+// Exit status 0 means connected, so an agent can poll it.
+func extStatus(args []string) error {
+	var names []string
+	switch {
+	case len(args) > 0:
+		b, err := findBrowser(strings.ToLower(args[0]))
+		if err != nil {
+			return err
 		}
-		return nil
+		names = []string{b.Name}
+	case pinnedBrowser() != "":
+		names = []string{pinnedBrowser()}
+	default:
+		for _, b := range detectBrowsers() {
+			names = append(names, b.Name)
+		}
 	}
-	for _, b := range bridges {
-		fmt.Printf("extension: %s instance=%s pid=%d port=%d v%s\n", b.Browser, b.Instance, b.PID, b.Port, b.Version)
+	ok := false
+	for _, name := range names {
+		if diagnoseExt(name) {
+			ok = true
+		}
+	}
+	if !ok {
+		return fmt.Errorf("not connected through the extension yet")
 	}
 	return nil
+}
+
+// diagnoseExt prints one browser's extension state, most specific cause
+// first, and reports whether commands can use it right now.
+func diagnoseExt(name string) bool {
+	if br := bridgeFor(name); br != nil {
+		if err := probeBridge(br); err != nil {
+			if strings.Contains(err.Error(), "turned off") {
+				fmt.Printf("off: the user turned use-browser off in %s. Do not work around it. If they want it back, tell them: click the \"use-browser bridge\" icon in the toolbar.\n", displayNames[name])
+			} else {
+				fmt.Printf("error: %s's extension is running but not answering: %v\n", name, err)
+			}
+			return false
+		}
+		fmt.Printf("ok %s connected through the extension (instance %s, v%s)\n", name, br.Instance, br.Version)
+		if br.Version != bundledExtVersion() {
+			fmt.Printf("outdated: this use-browser carries v%s. Tell the user: %s\n", bundledExtVersion(), reloadStep(name))
+		}
+		return true
+	}
+	if problem := hostProblem(name); problem != "" {
+		fmt.Printf("%s: %s. Run: use-browser ext install %s\n", name, problem, name)
+		return false
+	}
+	loaded, enabled := extInProfiles(name)
+	b, _ := findBrowser(name)
+	switch {
+	case len(loaded) == 0:
+		fmt.Printf("%s: the extension is not loaded yet. Tell the user:\n%s\n(If they just did, wait a few seconds and run this again.)\n", name, loadSteps(name))
+	case len(enabled) == 0:
+		fmt.Printf("%s: the extension is loaded (%s) but switched off. Tell the user: in %s, open %s://extensions and turn on \"use-browser bridge\".\n",
+			name, strings.Join(loaded, ", "), displayNames[name], schemeFor(name))
+	case b != nil && !b.isRunning():
+		fmt.Printf("%s: the extension is installed but %s is not running. It connects when %s starts; ask the user to open it.\n", name, displayNames[name], displayNames[name])
+	default:
+		fmt.Printf("%s: the extension is loaded but could not start use-browser.%s Run: use-browser ext install %s\nThen tell the user: %s. If its toolbar icon shows a red \"!\", hovering it shows the reason.\n",
+			name, lastHostLog(), name, reloadStep(name))
+	}
+	return false
+}
+
+// probeBridge makes one round trip through the extension. It is how a bridge
+// that is up but switched off by the user shows itself.
+func probeBridge(b *bridgeInfo) error {
+	fc, err := dialBridge(b)
+	if err != nil {
+		return err
+	}
+	c := &cdpClient{ws: fc}
+	defer c.Close()
+	_, err = c.browserCall("Browser.getVersion", nil)
+	return err
+}
+
+// hostProblem checks the registration a browser needs to start use-browser.
+func hostProblem(name string) string {
+	b, err := os.ReadFile(hostManifestPath())
+	if err != nil {
+		return "the native host is not registered"
+	}
+	var m struct {
+		Path string `json:"path"`
+	}
+	json.Unmarshal(b, &m)
+	if _, err := os.Stat(m.Path); err != nil {
+		return fmt.Sprintf("the native host points at %s, which no longer exists", m.Path)
+	}
+	if runtime.GOOS == "windows" {
+		if key, ok := registryKeys[name]; ok && exec.Command("reg", "query", key, "/ve").Run() != nil {
+			return "the native host is not registered for this browser"
+		}
+	}
+	return ""
+}
+
+// extInProfiles reads the browser's own records of which profiles have the
+// extension, and which of those have it enabled.
+func extInProfiles(name string) (loaded, enabled []string) {
+	dirs, _ := filepath.Glob(filepath.Join(userDataDirs()[name], "*"))
+	for _, d := range dirs {
+		base := filepath.Base(d)
+		if base != "Default" && !strings.HasPrefix(base, "Profile ") {
+			continue
+		}
+		for _, f := range []string{"Secure Preferences", "Preferences"} {
+			b, err := os.ReadFile(filepath.Join(d, f))
+			if err != nil {
+				continue
+			}
+			var prefs struct {
+				Extensions struct {
+					Settings map[string]struct {
+						DisableReasons json.RawMessage `json:"disable_reasons"`
+						State          *int            `json:"state"`
+					} `json:"settings"`
+				} `json:"extensions"`
+			}
+			if json.Unmarshal(b, &prefs) != nil {
+				continue
+			}
+			s, ok := prefs.Extensions.Settings[extensionID]
+			if !ok {
+				continue
+			}
+			loaded = append(loaded, base)
+			// disable_reasons is a bit mask in older builds, a list in newer.
+			r := strings.TrimSpace(string(s.DisableReasons))
+			off := r != "" && r != "0" && r != "[]" && r != "null"
+			if s.State != nil && *s.State == 0 {
+				off = true
+			}
+			if !off {
+				enabled = append(enabled, base)
+			}
+			break
+		}
+	}
+	return loaded, enabled
+}
+
+// lastHostLog is the host's last log line, which names the failure when the
+// browser did start use-browser but it gave up.
+func lastHostLog() string {
+	b, err := os.ReadFile(filepath.Join(bridgesDir(), "host.log"))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	return " Last host log: " + strings.TrimSpace(lines[len(lines)-1]) + "."
 }
 
 func extUninstall() error {

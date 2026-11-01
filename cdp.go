@@ -466,6 +466,10 @@ func connect() (*cdpClient, error) {
 			return nil, err
 		}
 		conn = fc
+		if v := bundledExtVersion(); e.bridge.Version != v {
+			fmt.Fprintf(os.Stderr, "note: the extension in %s is v%s, this use-browser carries v%s. Tell the user: %s\n",
+				e.browser, e.bridge.Version, v, reloadStep(e.browser))
+		}
 	} else {
 		wsURL := e.ws
 		// Toggle mode prompts the user on every connection, and this dial is

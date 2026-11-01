@@ -42,7 +42,7 @@ Pick one of four ways. If you want your logins, use the extension.
 use-browser ext install brave
 ```
 
-It registers use-browser with the browser, opens `brave://extensions`, and waits. Turn on Developer mode, click "Load unpacked", and pick the folder it prints. That is the only manual step. From then on, every command drives the browser you already have open, with your logins and tabs. There is no debug port, no profile copy, and no permission popup.
+It registers use-browser with the browser and writes the extension folder. Then you load the extension once, as described in [Set up the extension](#set-up-the-extension). From then on, every command drives the browser you already have open, with your logins and tabs. There is no debug port, no profile copy, and no permission popup.
 
 The agent never takes over your tabs. Its first `nav` opens its own background tab in a "use-browser" tab group. While it works, the browser shows its "started debugging this browser" bar. Click Cancel on that bar, or click the extension icon, to turn use-browser off.
 
@@ -53,6 +53,20 @@ The agent never takes over your tabs. Its first `nav` opens its own background t
 **4. A clean profile.** `use-browser launch brave` starts a separate, empty profile. Use it when the task needs no logins.
 
 If the extension is running, use-browser uses it. Otherwise it falls back to the other three. Run `use-browser doctor` to see which one you are on. With more than one browser installed, pin one with `use-browser use brave`.
+
+## Set up the extension
+
+If an agent sent you here, it already ran `use-browser ext install` for you. You only need to do this once per browser.
+
+1. Type `brave://extensions` in the address bar. Use `chrome://extensions` in Chrome and `edge://extensions` in Edge.
+2. Turn on **Developer mode** in the top right corner.
+3. Click **Load unpacked** and choose the extension folder. The path is on your clipboard. On Windows it is `%LOCALAPPDATA%\use-browser\extension`.
+
+That's it. A "use-browser bridge" icon appears in the toolbar. Tell your agent you're done, or run `use-browser ext status` yourself.
+
+The icon also shows the extension's state. A number means use-browser is driving that many tabs. `OFF` means you turned it off, and clicking the icon turns it back on. A red `!` means the browser could not start use-browser; hover it for the reason and run `use-browser ext install` again.
+
+Developer mode is needed because the extension is not on the Chrome Web Store. Browsers don't let programs install extensions into your profile, so this click can't be automated.
 
 ## Commands
 
@@ -74,7 +88,8 @@ use-browser tab <id>                 switch tab
 use-browser open [url]               new tab, prints its id
 use-browser close [id]               close a tab
 
-use-browser ext install [browser]    set up the extension (status | uninstall)
+use-browser ext install [browser]    set up the extension (uninstall to remove)
+use-browser ext status [browser]     is it connected, and if not, what's missing
 use-browser clone | connect | launch [browser]
 use-browser stop [browser]           close a browser use-browser started
 use-browser use [browser]            pin a browser (auto clears it)
