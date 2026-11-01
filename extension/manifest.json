@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "use-browser bridge",
+  "version": "0.9.0",
+  "description": "Lets the use-browser CLI drive this browser, with your logins, through chrome.debugger. Click the icon to turn it off.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4bB3hA+s3gymzF69/qj5AS0x+3JrY0a46jW31RFc+6poNl7xcA0ckxj3r2nXUkXIOXuR+nEaYxmrKz0bJbYvW4b3Dvm4CFzv+ep29779rLAB+lEf4kJ31Z0XVKjPZyjRElYCZBk/zAA5rEip5iF+b7Kmb87GF0mBSu/Nk11djWE7+hU57HjnR8UR703tucJeR81oOJtVFha1J9Y8ohpXQ5fcelIN1O1jfx7947K9rSd/xAxzae7UJoOJZ0TRJ4sSzWuxkfmnHbpEz+BS1kLH06RKzGjQ5sMtcb5S/wDilbUI7ZecYD49Rv8UuEh0THarrJQCR4jueNMmzZGLa3cRiQIDAQAB",
+  "minimum_chrome_version": "125",
+  "permissions": ["debugger", "tabs", "tabGroups", "nativeMessaging", "alarms", "storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "use-browser bridge" }
+}

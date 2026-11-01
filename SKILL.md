@@ -34,8 +34,9 @@ prefer that rebuilt binary over an older PATH installation; otherwise rebuild
 or update the CLI before continuing. Never fall back to attaching to a different
 already-running browser.
 
-If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the three ways to connect:
+If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the ways to connect:
 
+- **The extension (preferred for the user's logins).** When `use-browser ext status` lists a bridge, every command already drives the user's real, running browser — logins and all, no prompt, no copy — and you need none of the options below. If it lists none and the task needs the user's logins, run `use-browser ext install [browser]`: it registers the native host and waits while the user loads the unpacked extension once (they must do that click themselves). In this mode none of the user's tabs is adopted: your first `nav` opens your own background tab (in a "use-browser" tab group) and prints its id. Use `tab <id>` on one of the user's tabs only when they asked you to work in it. An error saying use-browser "is turned off in this browser" means the user switched it off (extension icon, or Cancel on the debugging bar): stop and tell them; never work around it with clone or connect.
 - `use-browser clone [browser]` copies the user's real profile (cookies, logins) into a non-default directory and launches the browser against the copy with flag-based remote debugging. No toggle, no popup, but real logins — the Chromium 136 restriction only applies to the default profile path. `--profile "Profile 1"` picks a profile; `--fresh` re-copies. Tell the user to close the source browser first for a complete copy. The real profile is only read, never launched with debugging.
 - `use-browser connect [browser]` attaches to the user's already-running browser with their real profile. **Use this only when the user is at the keyboard, and prefer `clone` otherwise.** On Chrome and Brave 144+ the "Allow remote debugging?" dialog is **per connection, not per session**: an accepted click buys exactly one connection, and the next invocation prompts again. `use-browser` opens one connection per invocation, so unattended work is impossible in this mode. Batch mode is the only lever - one invocation is one connection, so a whole task costs one click. The user must enable the toggle themselves; never flip security toggles on their behalf.
 - `use-browser launch [chrome|brave|edge|...]` starts a detected browser with a dedicated empty automation profile, isolated from the user's own browsing. Logins made in it persist between runs.
@@ -317,6 +318,7 @@ use-browser cdp <Domain.method> [params-json]   raw DevTools call
 use-browser use [browser]          pin browser selection (`auto` clears it)
 use-browser profiles [browser]     list that browser's real profiles, for clone
 use-browser clean [name|--all|--cache]   list/delete profiles (--cache keeps logins)
+use-browser ext install [browser]  drive the user's running browser via the extension (status | path | uninstall)
 use-browser connect [browser]      attach to the user's running browser (real profile, toggle)
 use-browser clone [browser]        copy real profile & launch it debuggable (logins, no toggle)
 use-browser launch [browser]       start a browser with a dedicated automation profile

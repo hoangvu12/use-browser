@@ -96,7 +96,8 @@ func activePort(profileDir string) (port, wsPath string) {
 type endpoint struct {
 	ws      string
 	browser string
-	mode    string // launch | clone | toggle | port | remote
+	mode    string      // launch | clone | toggle | port | remote | ext
+	bridge  *bridgeInfo // set in ext mode, where ws is only a label
 }
 
 // dirMode classifies a profile directory: our own dedicated profile, our copy
@@ -167,6 +168,18 @@ func discover() (endpoint, error) {
 		if ws := versionWS("http://127.0.0.1:" + strconv.Itoa(p)); ws != "" {
 			return endpoint{ws: ws, browser: pinnedBrowser(), mode: "port"}, nil
 		}
+	}
+	// The user's running browser through the bridge extension: real profile,
+	// nothing to approve. It beats the directory scan, which could otherwise
+	// land on the same profile behind the inspect toggle and its dialog. A
+	// named session may share it, keeping to its own tab, the same way
+	// sessions share a BU_CDP_URL.
+	b, err := pickBridge()
+	if err != nil {
+		return endpoint{}, err
+	}
+	if b != nil {
+		return endpoint{ws: fmt.Sprintf("extension bridge 127.0.0.1:%d (instance %s)", b.Port, b.Instance), browser: b.Browser, mode: "ext", bridge: b}, nil
 	}
 	// Scan profile directories for an active debugging port. Prefer the
 	// HTTP endpoint (gives a live WS URL); fall back to the file's ws path,
@@ -281,7 +294,7 @@ func portAlive(port string) bool {
 // ---- JSON-RPC over the browser WebSocket ----
 
 type cdpClient struct {
-	ws        *wsConn
+	ws        msgConn
 	nextID    int
 	sessionID string // attached page session (flattened)
 	targetID  string // attached page target id
@@ -289,10 +302,18 @@ type cdpClient struct {
 	// client is attached to an arbitrary page so `tabs`/`tab` can run, but
 	// every page-level command refuses until a tab is picked again.
 	stale string
+	// ext marks the extension bridge, i.e. the user's own running browser.
+	// noTab is set there until the agent opens or picks a tab, since none of
+	// the user's tabs is adopted implicitly.
+	ext   bool
+	noTab bool
 }
 
 // checkTab fails when the client is only provisionally attached.
 func (c *cdpClient) checkTab() error {
+	if c.noTab {
+		return fmt.Errorf("no current tab yet; in your real browser none of your tabs is taken over implicitly.%srun: use-browser open <url>   (or: use-browser tabs, then use-browser tab <id>)", "\n")
+	}
 	if c.stale == "" {
 		return nil
 	}
@@ -406,6 +427,7 @@ func (c *cdpClient) attach(targetID string) error {
 	c.sessionID = r.SessionID
 	c.targetID = targetID
 	c.stale = ""
+	c.noTab = false
 	// Focus emulation: when the window is occluded or the tab backgrounded,
 	// Chrome throttles the renderer and silently drops synthetic input —
 	// Runtime.evaluate keeps working, so evals (find, fill via insertText)
@@ -437,27 +459,37 @@ func connect() (*cdpClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	wsURL := e.ws
-	// Toggle mode prompts the user on every connection, and this dial is
-	// about to raise that dialog. Say so first: a dialog nobody expected,
-	// on the browser they are actually using, is not acceptable surprise.
-	if e.mode == "toggle" {
-		fmt.Fprintf(os.Stderr, "note: connecting to your real %s through its inspect toggle.%s"+
-			"      it will ask you to allow this connection, and will ask again next time.%s"+
-			"      to stop that: use-browser clone %s   (same logins, no prompt)%s",
-			e.browser, "\n", "\n", e.browser, "\n")
+	var conn msgConn
+	if e.bridge != nil {
+		fc, err := dialBridge(e.bridge)
+		if err != nil {
+			return nil, err
+		}
+		conn = fc
+	} else {
+		wsURL := e.ws
+		// Toggle mode prompts the user on every connection, and this dial is
+		// about to raise that dialog. Say so first: a dialog nobody expected,
+		// on the browser they are actually using, is not acceptable surprise.
+		if e.mode == "toggle" {
+			fmt.Fprintf(os.Stderr, "note: connecting to your real %s through its inspect toggle.%s"+
+				"      it will ask you to allow this connection, and will ask again next time.%s"+
+				"      to stop that: use-browser ext install %s   (extension, no prompt)%s",
+				e.browser, "\n", "\n", e.browser, "\n")
+		}
+		// The browser holds the handshake open until the user answers that
+		// dialog, so allow generous time for the click.
+		dialTimeout := 8 * time.Second
+		if os.Getenv("BU_CDP_WS") == "" && os.Getenv("BU_CDP_URL") == "" {
+			dialTimeout = 60 * time.Second
+		}
+		ws, err := wsDial(wsURL, dialTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("browser websocket %s: %v", wsURL, err)
+		}
+		conn = ws
 	}
-	// The browser holds the handshake open until the user answers that
-	// dialog, so allow generous time for the click.
-	dialTimeout := 8 * time.Second
-	if os.Getenv("BU_CDP_WS") == "" && os.Getenv("BU_CDP_URL") == "" {
-		dialTimeout = 60 * time.Second
-	}
-	ws, err := wsDial(wsURL, dialTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("browser websocket %s: %v", wsURL, err)
-	}
-	c := &cdpClient{ws: ws}
+	c := &cdpClient{ws: conn, ext: e.mode == "ext"}
 	pages, err := c.pageTargets()
 	if err != nil {
 		c.Close()
@@ -500,6 +532,12 @@ func connect() (*cdpClient, error) {
 		// The remembered tab is gone. Silently adopting some other tab is how
 		// one agent ends up driving another agent's page, so attach only far
 		// enough for `tabs` and `tab` to run and let checkTab stop the rest.
+		// Through the extension `tabs` needs no attachment, and attaching to
+		// one of the user's own tabs would put the debugging bar on it.
+		if c.ext {
+			c.stale = st.Target
+			return c, nil
+		}
 		if err := c.attach(pages[0].TargetID); err != nil {
 			c.Close()
 			return nil, err
@@ -507,7 +545,14 @@ func connect() (*cdpClient, error) {
 		c.stale = st.Target
 		return c, nil
 	}
-	// No tab picked yet: adopt one and remember it.
+	// No tab picked yet. In the user's real browser the first tab is theirs,
+	// and a `nav` there would throw away whatever they had open, so nothing
+	// is adopted: nav opens the agent its own tab instead.
+	if c.ext {
+		c.noTab = true
+		return c, nil
+	}
+	// Otherwise adopt one and remember it.
 	if err := c.attach(pages[0].TargetID); err != nil {
 		c.Close()
 		return nil, err

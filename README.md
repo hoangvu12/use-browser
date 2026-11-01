@@ -47,6 +47,18 @@ debugging endpoint cannot be selected accidentally. `doctor` should mark Chrome
 rebuilt binary supports `use` but the PATH-installed binary does not, use the
 rebuilt binary or update the installation before connecting.
 
+**Your real, running browser, no prompts** — the use-browser extension:
+
+```
+use-browser ext install chrome
+```
+
+This registers use-browser as the extension's native messaging host and unpacks a small extension (`extension/`, embedded in the binary). Load it once in `chrome://extensions` with Developer mode on → "Load unpacked"; the command opens the page and waits for it to connect. From then on every command drives the browser you are actually using, with your logins, open tabs and all, and nothing to approve per connection. It is the same architecture as Claude in Chrome: the browser starts `use-browser` as a native host whenever the extension runs, the host listens on a loopback port with a per-run token, and the extension serves the CLI's CDP through `chrome.debugger` — page commands pass straight through, `Target.*` is emulated on `chrome.tabs`. No `--remote-debugging-port`, no profile copy, no closed browser.
+
+Three rules keep it polite in a browser someone is working in. None of your tabs is ever adopted implicitly: the first `nav` opens the agent its own background tab, grouped under "use-browser", and `tab <id>` is the only way onto one of yours. The browser shows its "started debugging this browser" bar while a tab is attached, and tabs are released after five idle minutes. Pressing Cancel on that bar, or clicking the extension icon, turns the bridge off until the icon is clicked again (the badge reads `OFF`; a red `!` means it cannot reach use-browser — rerun `ext install`).
+
+The bridge wins over every other discovery route except `BU_CDP_*` and a browser this session launched itself. `BU_EXT=off` skips it for a command; with two profiles running the extension, `BU_EXT=<instance>` picks one (`use-browser ext status` lists them). `use-browser ext uninstall` removes the registration.
+
 **Your real profile, no toggle** — clone it and drive the copy:
 
 ```
@@ -273,6 +285,7 @@ use-browser close [id]                    close the current tab, or the one name
 use-browser js <expr>                     run JavaScript in the page (js - reads stdin)
 use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
 use-browser use [browser]                 pin browser selection (`auto` clears it)
+use-browser ext install [browser]         drive your running browser via the extension (status | path | uninstall)
 use-browser apikey set <key>              store the TypeSafe API key for find (show | clear; - reads stdin)
 use-browser profiles [browser]            list real profiles, for clone
 use-browser clean [name|--all|--cache]    list or delete use-browser's own profiles (--cache keeps logins)

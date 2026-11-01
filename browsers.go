@@ -413,7 +413,11 @@ func connectHelp() string {
 		return "no Chromium-family browser detected; install Chrome, Brave, or Edge"
 	}
 	b := pickBrowser()
-	s := fmt.Sprintf(`To use your real %s profile (logins intact) with no toggle:
+	s := fmt.Sprintf(`To drive your real, running %s (logins intact, no prompts, no copy):
+  run: use-browser ext install %s
+  (one-time: load the use-browser extension it unpacks)
+
+To use your real %s profile (logins intact) with no toggle:
   run: use-browser clone %s
   (copies your profile to a non-default dir, then launches it debuggable)
 
@@ -422,7 +426,7 @@ Or attach to your already-running %s via a one-time toggle:
   (opens %s; enable "Allow remote debugging for this browser instance")
 
 Or start a separate instance with a dedicated empty profile:
-  use-browser launch %s`, b.Name, b.Name, b.Name, b.Name, b.inspectURL(), b.Name)
+  use-browser launch %s`, b.Name, b.Name, b.Name, b.Name, b.Name, b.Name, b.inspectURL(), b.Name)
 	if len(found) > 1 {
 		s += "\nDetected browsers:"
 		for _, f := range found {
@@ -670,6 +674,8 @@ func endpointModeText(e endpoint) string {
 		return "your real profile via the inspect toggle (use-browser connect)"
 	case "remote":
 		return "remote endpoint (BU_CDP_URL / BU_CDP_WS)"
+	case "ext":
+		return "your real, running browser through the use-browser extension - your logins, no prompt"
 	default:
 		// savePort is only ever called by launch and clone, so this is still
 		// an instance we started: flag-based debugging, no permission popup.

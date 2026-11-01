@@ -66,6 +66,10 @@ Setup:
   use-browser profiles [browser]  list that browser's real profiles, for clone
   use-browser clean [name|--all]  list or delete use-browser's own profiles
                                   --cache drops only caches, keeping logins
+  use-browser ext install [browser]  drive your normal, running browser through the
+                                  use-browser extension: real profile, no prompts,
+                                  no copy (one-time: load the unpacked extension)
+                                  ext status | ext path | ext uninstall
   use-browser connect [browser]   attach to your normal browser, real profile (one-time toggle)
   use-browser clone [browser]     copy your real profile & launch it debuggable (logins, no toggle)
   use-browser launch [browser]    start a browser with a dedicated automation profile
@@ -155,6 +159,10 @@ var pageCommands = map[string]func(*cdpClient, []string) error{
 }
 
 func main() {
+	// Started by the browser as the extension's native messaging host.
+	if isNativeHostLaunch(os.Args[1:]) {
+		os.Exit(runNativeHost(os.Args[1]))
+	}
 	args, err := parseGlobalFlags(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -222,6 +230,12 @@ func main() {
 		return
 	case "connect":
 		if err := cmdConnect(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "ext":
+		if err := cmdExt(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
