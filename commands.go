@@ -23,6 +23,9 @@ func cmdNav(c *cdpClient, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: use-browser nav <url>")
 	}
+	if c.noTab {
+		return cmdOpen(c, args) // the user's browser: a tab of our own, not theirs
+	}
 	u := normalizeURL(args[0])
 	res, err := c.Call("Page.navigate", map[string]any{"url": u})
 	if err != nil {
@@ -459,6 +462,9 @@ func cmdDoctor(args []string) error {
 		fmt.Printf("typesafe key: %s (find available)\n", src)
 	} else {
 		fmt.Println("typesafe key: none (find falls back to snap; use-browser apikey set <key>)")
+	}
+	for _, b := range liveBridges() {
+		fmt.Printf("extension: %s instance=%s port=%d (use-browser ext status)\n", b.Browser, b.Instance, b.Port)
 	}
 	e, err := discover()
 	if err != nil {

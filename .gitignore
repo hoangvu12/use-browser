@@ -8,3 +8,5 @@
 # editor / OS
 .DS_Store
 *.swp
+/use-browser.exe~
+/*.exe.old

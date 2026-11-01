@@ -34,11 +34,37 @@ prefer that rebuilt binary over an older PATH installation; otherwise rebuild
 or update the CLI before continuing. Never fall back to attaching to a different
 already-running browser.
 
-If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the three ways to connect:
+If a command fails to connect, run `use-browser doctor`. It lists installed browsers and prints the ways to connect:
 
+- **The extension** drives the user's real, running browser with their logins. Prefer it whenever the task needs logins; see "The user's logged-in browser" below.
 - `use-browser clone [browser]` copies the user's real profile (cookies, logins) into a non-default directory and launches the browser against the copy with flag-based remote debugging. No toggle, no popup, but real logins — the Chromium 136 restriction only applies to the default profile path. `--profile "Profile 1"` picks a profile; `--fresh` re-copies. Tell the user to close the source browser first for a complete copy. The real profile is only read, never launched with debugging.
 - `use-browser connect [browser]` attaches to the user's already-running browser with their real profile. **Use this only when the user is at the keyboard, and prefer `clone` otherwise.** On Chrome and Brave 144+ the "Allow remote debugging?" dialog is **per connection, not per session**: an accepted click buys exactly one connection, and the next invocation prompts again. `use-browser` opens one connection per invocation, so unattended work is impossible in this mode. Batch mode is the only lever - one invocation is one connection, so a whole task costs one click. The user must enable the toggle themselves; never flip security toggles on their behalf.
 - `use-browser launch [chrome|brave|edge|...]` starts a detected browser with a dedicated empty automation profile, isolated from the user's own browsing. Logins made in it persist between runs.
+
+## The user's logged-in browser (extension)
+
+The use-browser extension lets every command drive the browser the user already has open, with their logins and tabs: no profile copy, no permission popup. When it is connected, use-browser picks it automatically. Use it whenever the task needs the user's accounts; use `launch` when it does not.
+
+Check first:
+
+```bash
+use-browser ext status brave     # exit 0 = connected; otherwise it says what is missing
+```
+
+If it is not connected, set it up. You do the commands; the user does one step in the browser that no program is allowed to do for them, and they cannot see your terminal, so you must relay it:
+
+1. Run `use-browser ext install <browser>`. When run by an agent it does not wait: it registers use-browser with the browser, writes the extension folder, copies the folder path to the clipboard, opens a setup guide page in the browser, and prints the exact steps for the user.
+2. Send the user those steps in chat, word for word, and ask them to say when they are done. They are: open `<browser>://extensions`, turn on Developer mode, click "Load unpacked", choose the printed folder.
+3. When they reply, run `use-browser ext status <browser>`. On exit 0, continue the task. Otherwise it prints the specific problem (not loaded yet, loaded but switched off, browser closed, use-browser could not start) together with what to tell the user; relay that and check again. Do not loop on status without telling the user anything.
+
+If the user does not want the extension, fall back to `clone` (logins, but in a copied profile) and say so.
+
+While working through the extension:
+
+- None of the user's tabs is adopted. Your first `nav` opens your own background tab in a "use-browser" tab group and prints its id. Use `tab <id>` on one of the user's tabs only when they asked you to work in it, and never close a tab you did not open.
+- The browser shows a "started debugging this browser" bar while you work. That is expected; tell the user if they ask.
+- An error or status line saying use-browser is turned off means the user switched it off (toolbar icon, or Cancel on that bar). Stop and tell them. Never work around it with clone or connect.
+- A `note:` saying the extension is older than use-browser comes with a sentence to relay (reload it in the extensions page). Relay it once; commands keep working meanwhile.
 
 ## Choose the lightest browser lifecycle
 
@@ -317,6 +343,8 @@ use-browser cdp <Domain.method> [params-json]   raw DevTools call
 use-browser use [browser]          pin browser selection (`auto` clears it)
 use-browser profiles [browser]     list that browser's real profiles, for clone
 use-browser clean [name|--all|--cache]   list/delete profiles (--cache keeps logins)
+use-browser ext install [browser]  set up the extension for the user's logged-in browser
+use-browser ext status [browser]   connected? if not, what to tell the user (exit 0 = connected)
 use-browser connect [browser]      attach to the user's running browser (real profile, toggle)
 use-browser clone [browser]        copy real profile & launch it debuggable (logins, no toggle)
 use-browser launch [browser]       start a browser with a dedicated automation profile

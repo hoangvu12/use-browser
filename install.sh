@@ -44,4 +44,4 @@ case ":$PATH:" in
   *":$dir:"*) ;;
   *) echo "note: add $dir to your PATH" ;;
 esac
-echo "next: start Chrome with --remote-debugging-port=9222, then run: use-browser doctor"
+echo "next: use-browser ext install <browser>   (drive your logged-in browser), or: use-browser doctor"

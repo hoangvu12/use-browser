@@ -12,9 +12,15 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 $exe = Join-Path $dir "use-browser.exe"
 
 Write-Host "downloading $url"
+# A browser running the use-browser extension keeps this exe open as its
+# native host, and Windows will not overwrite a running exe. It will rename
+# one, so move the old binary aside first; the next run cleans it up.
+Remove-Item "$exe.old" -Force -ErrorAction SilentlyContinue
+if (Test-Path $exe) { Move-Item $exe "$exe.old" -Force }
 try {
     Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $exe
 } catch {
+    if (Test-Path "$exe.old") { Move-Item "$exe.old" $exe -Force }
     Write-Host "error: download failed. If no release exists yet, build from source:" -ForegroundColor Red
     Write-Host "  git clone https://github.com/$repo; cd use-browser; go build -o use-browser.exe ."
     exit 1
@@ -27,4 +33,4 @@ if ($userPath -notlike "*$dir*") {
 }
 
 Write-Host "installed $exe"
-Write-Host "next: start Chrome with --remote-debugging-port=9222, then run: use-browser doctor"
+Write-Host "next: use-browser ext install <browser>   (drive your logged-in browser), or: use-browser doctor"
