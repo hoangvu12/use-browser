@@ -22,6 +22,7 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/binary"
@@ -118,7 +119,10 @@ type bridgeInfo struct {
 	Browser  string `json:"browser"`
 	Instance string `json:"instance"`
 	Version  string `json:"version"`
-	path     string
+	// Build is the content hash the loaded extension was written with (its
+	// build.json); "" for builds from before the hash existed.
+	Build string `json:"build"`
+	path  string
 }
 
 func bridgesDir() string { return filepath.Join(stateDir(), "bridges") }
@@ -266,6 +270,7 @@ func runNativeHost(origin string) int {
 			Browser  string `json:"browser"`
 			Instance string `json:"instance"`
 			Version  string `json:"version"`
+			Build    string `json:"build"`
 		} `json:"hello"`
 	}
 	json.Unmarshal(first, &hello)
@@ -285,6 +290,7 @@ func runNativeHost(origin string) int {
 	info := bridgeInfo{
 		PID: os.Getpid(), Port: ln.Addr().(*net.TCPAddr).Port, Token: h.token,
 		Browser: hello.Hello.Browser, Instance: hello.Hello.Instance, Version: hello.Hello.Version,
+		Build: hello.Hello.Build,
 	}
 	path := filepath.Join(bridgesDir(), info.Browser+"-"+info.Instance+".json")
 	b, _ := json.Marshal(info)
@@ -477,23 +483,8 @@ func extInstall(args []string) error {
 
 	// 1. The extension, unpacked where the browser can load it.
 	dir := extensionDir()
-	os.RemoveAll(dir)
-	err = fs.WalkDir(extensionFiles, "extension", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		dst := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(p, "extension")))
-		if d.IsDir() {
-			return os.MkdirAll(dst, 0o755)
-		}
-		data, err := extensionFiles.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(dst, data, 0o644)
-	})
-	if err != nil {
-		return fmt.Errorf("unpack extension: %v", err)
+	if err := writeExtensionDir(); err != nil {
+		return err
 	}
 
 	// 2. The native host manifest, pointing at this binary.
@@ -532,10 +523,8 @@ func extInstall(args []string) error {
 	fmt.Printf("ok native host registered (%s)\n", exe)
 
 	if br := bridgeFor(b.Name); br != nil {
-		fmt.Printf("ok %s is already connected through the extension\n", b.Name)
-		if br.Version != bundledExtVersion() {
-			fmt.Printf("the loaded extension is v%s and this use-browser carries v%s. Tell the user:\n  %s\n", br.Version, bundledExtVersion(), reloadStep(b.Name))
-		}
+		currentBridge(br)
+		fmt.Printf("ok %s is connected through the extension\n", b.Name)
 		return nil
 	}
 
@@ -594,6 +583,94 @@ func reloadStep(name string) string {
 func stdoutIsTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// bundledExtBuild hashes the extension embedded in this binary. The folder
+// gets it as build.json and the loaded extension reports it back, so any
+// change to the extension is noticed without anyone bumping a version.
+func bundledExtBuild() string {
+	h := sha256.New()
+	fs.WalkDir(extensionFiles, "extension", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			data, _ := extensionFiles.ReadFile(p)
+			fmt.Fprintf(h, "%s %d\n", p, len(data))
+			h.Write(data)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// writeExtensionDir writes the embedded extension where the browser loads it
+// from, stamped with its build hash.
+func writeExtensionDir() error {
+	dir := extensionDir()
+	err := fs.WalkDir(extensionFiles, "extension", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(p, "extension")))
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		data, err := extensionFiles.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, data, 0o644)
+	})
+	if err != nil {
+		return fmt.Errorf("write extension: %v", err)
+	}
+	stamp, _ := json.Marshal(map[string]string{"build": bundledExtBuild()})
+	return os.WriteFile(filepath.Join(dir, "build.json"), stamp, 0o644)
+}
+
+// updateExtension brings the extension a browser is running up to the one in
+// this binary: rewrite its folder, have it reload itself from there, and wait
+// for the bridge it comes back with. Unpacked extensions reload from disk,
+// which is what makes a release reach the browser with nobody clicking.
+func updateExtension(b *bridgeInfo) (*bridgeInfo, error) {
+	if err := writeExtensionDir(); err != nil {
+		return nil, err
+	}
+	fc, err := dialBridge(b)
+	if err != nil {
+		return nil, err
+	}
+	c := &cdpClient{ws: fc}
+	_, err = c.browserCall("UseBrowser.reload", nil)
+	c.Close()
+	if err != nil {
+		return nil, err // an extension from before self-update existed
+	}
+	want := bundledExtBuild()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, nb := range liveBridges() {
+			if nb.Instance == b.Instance && nb.Build == want {
+				return &nb, nil
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("it did not reconnect within 15s after reloading")
+}
+
+// currentBridge updates an outdated extension on the spot. When that is not
+// possible it says what to tell the user, and the old one keeps working.
+func currentBridge(b *bridgeInfo) *bridgeInfo {
+	if b.Build == bundledExtBuild() {
+		return b
+	}
+	nb, err := updateExtension(b)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: the use-browser extension in %s is out of date and could not update itself (%v). Tell the user: %s\n",
+			b.Browser, err, reloadStep(b.Browser))
+		return b
+	}
+	fmt.Fprintf(os.Stderr, "note: updated the use-browser extension in %s\n", b.Browser)
+	return nb
 }
 
 // bundledExtVersion is the version of the extension embedded in this binary.
@@ -672,6 +749,7 @@ func extStatus(args []string) error {
 // first, and reports whether commands can use it right now.
 func diagnoseExt(name string) bool {
 	if br := bridgeFor(name); br != nil {
+		br = currentBridge(br)
 		if err := probeBridge(br); err != nil {
 			if strings.Contains(err.Error(), "turned off") {
 				fmt.Printf("off: the user turned use-browser off in %s. Do not work around it. If they want it back, tell them: click the puzzle-piece Extensions button in the toolbar, then \"use-browser bridge\" (pinning it there keeps the switch one click away).\n", displayNames[name])
@@ -681,9 +759,6 @@ func diagnoseExt(name string) bool {
 			return false
 		}
 		fmt.Printf("ok %s connected through the extension (instance %s, v%s)\n", name, br.Instance, br.Version)
-		if br.Version != bundledExtVersion() {
-			fmt.Printf("outdated: this use-browser carries v%s. Tell the user: %s\n", bundledExtVersion(), reloadStep(name))
-		}
 		return true
 	}
 	if problem := hostProblem(name); problem != "" {

@@ -37,7 +37,13 @@ async function connect() {
     instance = crypto.randomUUID().slice(0, 8);
     await chrome.storage.local.set({ instance });
   }
-  if (port) return; // another event connected while we awaited storage
+  // build.json is written next to these files by use-browser; its hash tells
+  // the CLI whether this copy is the one it carries.
+  const build = await fetch(chrome.runtime.getURL("build.json"))
+    .then((r) => r.json())
+    .then((j) => j.build || "")
+    .catch(() => "");
+  if (port) return; // another event connected while we awaited
   try {
     port = chrome.runtime.connectNative(HOST);
   } catch (e) {
@@ -54,7 +60,7 @@ async function connect() {
     updateBadge();
   });
   port.postMessage({
-    hello: { browser: browserName(), instance, version: chrome.runtime.getManifest().version },
+    hello: { browser: browserName(), instance, version: chrome.runtime.getManifest().version, build },
   });
   lastError = "";
   updateBadge();
@@ -80,6 +86,13 @@ async function onHostMessage(env) {
     return;
   }
   const m = env.m || {};
+  // A new use-browser has rewritten this folder: reload from it. Allowed
+  // while turned off, since the off switch survives a reload.
+  if (m.method === "UseBrowser.reload") {
+    send(env.c, { id: m.id, result: {} });
+    setTimeout(() => chrome.runtime.reload(), 100);
+    return;
+  }
   let reply;
   try {
     if (paused) throw new Error("use-browser is turned off in this browser (click the use-browser bridge icon to turn it back on)");
