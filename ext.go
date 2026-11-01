@@ -674,7 +674,7 @@ func diagnoseExt(name string) bool {
 	if br := bridgeFor(name); br != nil {
 		if err := probeBridge(br); err != nil {
 			if strings.Contains(err.Error(), "turned off") {
-				fmt.Printf("off: the user turned use-browser off in %s. Do not work around it. If they want it back, tell them: click the \"use-browser bridge\" icon in the toolbar.\n", displayNames[name])
+				fmt.Printf("off: the user turned use-browser off in %s. Do not work around it. If they want it back, tell them: click the puzzle-piece Extensions button in the toolbar, then \"use-browser bridge\" (pinning it there keeps the switch one click away).\n", displayNames[name])
 			} else {
 				fmt.Printf("error: %s's extension is running but not answering: %v\n", name, err)
 			}

@@ -62,7 +62,7 @@ If an agent sent you here, it already ran `use-browser ext install` for you. You
 2. Turn on **Developer mode** in the top right corner.
 3. Click **Load unpacked** and choose the extension folder. The path is on your clipboard. On Windows it is `%LOCALAPPDATA%\use-browser\extension`.
 
-That's it. A "use-browser bridge" icon appears in the toolbar. Tell your agent you're done, or run `use-browser ext status` yourself.
+That's it. Tell your agent you're done, or run `use-browser ext status` yourself. Pin "use-browser bridge" from the puzzle-piece Extensions menu so its icon stays in the toolbar; the icon is the on/off switch.
 
 The icon also shows the extension's state. A number means use-browser is driving that many tabs. `OFF` means you turned it off, and clicking the icon turns it back on. A red `!` means the browser could not start use-browser; hover it for the reason and run `use-browser ext install` again.
 
