@@ -541,13 +541,20 @@ func extInstall(args []string) error {
 		fmt.Printf("load it once in %s: %s://extensions -> Developer mode -> Load unpacked -> %s\n", b.Name, schemeFor(b.Name), dir)
 		return nil
 	}
-	exec.Command(b.Path, schemeFor(b.Name)+"://extensions").Start()
-	fmt.Printf(`load the extension once in %s (opened %s://extensions):
-  1. turn on "Developer mode" (top right)
-  2. "Load unpacked" -> %s
-waiting up to 3 minutes for it to connect...
-`, b.Name, schemeFor(b.Name), dir)
-	deadline := time.Now().Add(3 * time.Minute)
+	// Browsers refuse to open their internal pages from the command line
+	// (Brave shows its start page instead), so the user types the address.
+	// The folder goes on the clipboard for the file picker.
+	clip := ""
+	if copyToClipboard(dir) == nil {
+		clip = "   (path is on your clipboard)"
+	}
+	fmt.Printf(`load the extension once in %s:
+  1. open %s://extensions in the address bar
+  2. turn on "Developer mode" (top right)
+  3. "Load unpacked" -> %s%s
+waiting up to 5 minutes for it to connect...
+`, b.Name, schemeFor(b.Name), dir, clip)
+	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		if br := bridgeFor(b.Name); br != nil {
 			fmt.Printf("ok %s connected through the extension (instance %s); your real profile, no prompts\n", b.Name, br.Instance)
@@ -556,6 +563,20 @@ waiting up to 3 minutes for it to connect...
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("the extension did not connect. Once it is loaded, check: use-browser ext status")
+}
+
+func copyToClipboard(s string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("clip")
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	default:
+		return fmt.Errorf("no clipboard tool")
+	}
+	cmd.Stdin = strings.NewReader(s)
+	return cmd.Run()
 }
 
 func bridgeFor(name string) *bridgeInfo {

@@ -1,16 +1,18 @@
 # use-browser
 
-A small browser CLI for coding agents. It's a single Go binary with no dependencies that drives a real browser over the DevTools protocol. Any Chromium-family browser works: Chrome, Brave, Edge, Chromium, Vivaldi, Opera.
+A browser CLI for coding agents. It is one Go binary with no dependencies, and it drives any Chromium browser (Chrome, Brave, Edge, Chromium, Vivaldi, Opera).
 
-The idea came from using [browser-use](https://github.com/browser-use/browser-use): the "coding agent drives the browser" model is right, but installing it pulls in about 40 Python packages, including five LLM SDKs the CLI never touches, and every look at a page tends to go through a screenshot. This tool keeps the model and drops the weight.
+Agents read pages as short indexed text instead of screenshots, so a typical look at a page costs 200 to 600 tokens.
 
-|  | browser-use CLI | use-browser |
-|---|---|---|
-| Install | `pip install browser-use`, ~40 packages | one 6 MB binary |
-| Runtime | Python 3.11+ plus a background daemon | none |
-| Round trip per command | Python startup plus daemon IPC | measured 53 ms |
-| Telemetry | posthog, on by default | none |
-| How the agent reads a page | screenshot, roughly 1,500 tokens each | indexed text snapshot, usually 200 to 600 tokens |
+```
+$ use-browser nav news.ycombinator.com
+ok https://news.ycombinator.com/ "Hacker News"
+$ use-browser snap
+[3]<a> "new"
+[12]<a> "OnePlus halts operations in USA and Europe"
+[17]<a> "18 comments"
+$ use-browser click 17
+```
 
 ## Install
 
@@ -26,309 +28,87 @@ macOS and Linux:
 curl -fsSL https://raw.githubusercontent.com/hoangvu12/use-browser/main/install.sh | sh
 ```
 
-If you'd rather build from source, `go build -o use-browser .` with Go 1.24 or newer is the whole process.
+Or build it with Go 1.24+: `go build -o use-browser .`
+
+To teach your agent the workflow, add the skill with `npx skills add hoangvu12/use-browser`, or save `use-browser skill` to your agent's skills folder.
 
 ## Connect a browser
 
-`use-browser doctor` lists the browsers it found and how to connect. There are three ways, because Chromium 136 [stopped honoring](https://developer.chrome.com/blog/remote-debugging-port) `--remote-debugging-port` on a browser's default profile:
+Pick one of four ways. If you want your logins, use the extension.
 
-Pin the browser before connecting whenever more than one Chromium-family
-browser is installed or running:
-
-```
-use-browser use chrome
-use-browser launch chrome
-use-browser doctor chrome
-```
-
-The pin scopes endpoint and profile discovery to Chrome, so an existing Brave
-debugging endpoint cannot be selected accidentally. `doctor` should mark Chrome
-`<- pinned`; `use-browser use auto` clears the pin. If a source checkout's
-rebuilt binary supports `use` but the PATH-installed binary does not, use the
-rebuilt binary or update the installation before connecting.
-
-**Your real, running browser, no prompts** — the use-browser extension:
+**1. The extension (your real browser, logged in).** Run this once:
 
 ```
-use-browser ext install chrome
+use-browser ext install brave
 ```
 
-This registers use-browser as the extension's native messaging host and unpacks a small extension (`extension/`, embedded in the binary). Load it once in `chrome://extensions` with Developer mode on → "Load unpacked"; the command opens the page and waits for it to connect. From then on every command drives the browser you are actually using, with your logins, open tabs and all, and nothing to approve per connection. It is the same architecture as Claude in Chrome: the browser starts `use-browser` as a native host whenever the extension runs, the host listens on a loopback port with a per-run token, and the extension serves the CLI's CDP through `chrome.debugger` — page commands pass straight through, `Target.*` is emulated on `chrome.tabs`. No `--remote-debugging-port`, no profile copy, no closed browser.
+It registers use-browser with the browser, opens `brave://extensions`, and waits. Turn on Developer mode, click "Load unpacked", and pick the folder it prints. That is the only manual step. From then on, every command drives the browser you already have open, with your logins and tabs. There is no debug port, no profile copy, and no permission popup.
 
-Three rules keep it polite in a browser someone is working in. None of your tabs is ever adopted implicitly: the first `nav` opens the agent its own background tab, grouped under "use-browser", and `tab <id>` is the only way onto one of yours. The browser shows its "started debugging this browser" bar while a tab is attached, and tabs are released after five idle minutes. Pressing Cancel on that bar, or clicking the extension icon, turns the bridge off until the icon is clicked again (the badge reads `OFF`; a red `!` means it cannot reach use-browser — rerun `ext install`).
+The agent never takes over your tabs. Its first `nav` opens its own background tab in a "use-browser" tab group. While it works, the browser shows its "started debugging this browser" bar. Click Cancel on that bar, or click the extension icon, to turn use-browser off.
 
-The bridge wins over every other discovery route except `BU_CDP_*` and a browser this session launched itself. `BU_EXT=off` skips it for a command; with two profiles running the extension, `BU_EXT=<instance>` picks one (`use-browser ext status` lists them). `use-browser ext uninstall` removes the registration.
+**2. Clone your profile.** `use-browser clone brave` copies your profile to a separate folder and launches that copy with debugging on. You get your logins, but in a second window. On Windows the cookie file is locked while the browser runs, so `--close-source` closes your browser first to copy it.
 
-**Your real profile, no toggle** — clone it and drive the copy:
+**3. The inspect toggle.** `use-browser connect brave` uses the browser's own remote debugging switch. Chrome and Brave ask "Allow?" on every connection, so this only works with you at the keyboard.
 
-```
-use-browser clone brave
-```
+**4. A clean profile.** `use-browser launch brave` starts a separate, empty profile. Use it when the task needs no logins.
 
-This copies your real profile (cookies, logins) into a non-default directory next to the CLI's state, then launches the browser against the copy with `--remote-debugging-port` baked in. Because the copy lives at a non-default path, Chromium 136 allows flag-based debugging there — so you get your logins with no `chrome://inspect` toggle and no popup. This is the same fallback [browser-use uses](https://github.com/browser-use/browser-use/issues/1520). Pick a specific profile with `--profile "Profile 1"`, and refresh the copy from your real profile with `--fresh`. Close the source browser first for a complete copy (a running browser can hold cookie files locked). Your day-to-day browser is only read, never launched with debugging.
-
-**Your real profile, with a toggle** — attach to the browser you're already running:
-
-```
-use-browser connect
-```
-
-This opens `chrome://inspect/#remote-debugging` (`brave://inspect/#remote-debugging` in Brave, and so on) in whichever browser you're running, and waits while you enable "Allow remote debugging for this browser instance". One toggle, once. Nothing gets around the restriction here, since the whole point is that a human has to approve it in the live profile.
-
-**A clean, separate profile** — keep automation isolated:
-
-```
-use-browser launch brave
-```
-
-This starts the browser you name (or the first one detected) with a dedicated empty profile stored next to the CLI's state. Logins you make there stick around for future runs, and your day-to-day browser never sees any of it.
-
-### Job lifecycle
-
-Use `launch` when a task does not need the user's real cookies or logins. Use
-`clone` only when it does. A clone has one reusable slot per browser: the first
-use copies it, later uses sync only changes, and changing `--profile` rebuilds
-that slot so source profiles never mix.
-
-End either owned-browser workflow with `use-browser stop`. It gracefully closes
-the launch or clone and keeps its profile on disk for the next job. It never
-closes a real profile attached through `connect` or a remote `BU_CDP_URL`.
-
-`BU_CDP_URL` points the CLI at any other DevTools endpoint, including a remote or cloud browser.
-
-## How it works
-
-`use-browser snap` injects one JavaScript pass that walks the DOM, including open shadow roots and same-origin iframes, and prints only the visible interactive elements:
-
-```
-$ use-browser snap
-https://news.ycombinator.com/ "Hacker News" scroll=0+485/1249
-[3]<a> "new"
-[12]<a> "OnePlus halts operations in USA and Europe"
-[17]<a> "18 comments"
-...
-```
-
-The agent acts by index: `use-browser click 17`, `use-browser fill 4 "query"`. Element references live in the page itself (a `window.__bu` array), so an index from a previous invocation still resolves to the live element. When the page has navigated or the element is gone, the command fails with a message telling the agent to snap again. Screenshots exist (`use-browser shot`) but are the fallback for canvas apps and visual questions, not the default way to see a page.
-
-When a page has hundreds of elements, the snapshot itself becomes the expensive part. `find` (0.7.0) outsources the picking: it snaps internally, sends the indexed lines to Jev — [TypeSafe](https://typesafe.ai)'s decision model — in one request, and prints the pick with its probability, confidence, and an existence check. `find "accept cookies" --click` acts on a confident pick and nothing else; a weak match prints the top candidates and falls back to the same snap-the-page-yourself path a stale index takes.
-
-`run` (0.8.0) is the fast lane for bounded tasks — a Jev closed loop in the [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) shape: one request per step picks the operation (click / type / scroll / wait / done / blocked) and, speculatively, the target element and which supplied text value belongs in it. `run "fill the order form and submit it" --set "Nguyen Vu"` executes the whole flow in seconds where an agent would spend a dozen round trips. Two gates keep it honest: it stops and hands back at login/password/payment pages (never feed it credentials — Jev does not generate text anyway, values come from quoted strings in the goal or `--set`), and `done` only counts when a separate Jev check sees visible evidence the goal is met. Anything needing judgment, novel pages, or credentials stays with the agent and snap/click.
-
-The key is the opt-in signal. Set it up once with:
-
-```
-use-browser apikey set <key>   # key from https://console.typesafe.ai
-use-browser apikey show        # masked — the full key never prints
-use-browser apikey clear
-```
-
-It is stored in use-browser's state dir (not the environment; `apikey set -` reads it from stdin if you'd rather keep it out of shell history), and `TYPESAFE_API_KEY` overrides it when set, for CI. With a key configured, agents prefer `find` for element picking; without one they use `snap` as always, and nothing in use-browser ever calls TypeSafe unless `find` runs.
-
-There is deliberately no daemon. browser-use runs one to keep its CDP connection and session state alive between invocations. In Go, opening a fresh WebSocket to Chrome costs around 10 ms, so each command just connects, acts, and exits. The only persistent state is the current tab id in a small JSON file.
-
-## Choosing a browser
-
-With one Chromium installed there is nothing to do. With several, pin one — the pin persists, so it is said once:
-
-```bash
-use-browser use chrome        # persists
-use-browser --browser chrome snap   # one command only, writes nothing
-```
-
-With nothing pinned and two browsers debuggable, discovery stops rather than guessing:
-
-```
-$ use-browser snap
-error: chrome and brave both accept a debug connection, and no browser is pinned.
-Pin one — it persists, so you only say it once:
-  use-browser use chrome
-Or override a single command: use-browser --browser chrome <command>
-```
-
-Guessing here is how an agent ends up driving the Brave you asked it to leave alone. The ambiguous case is the only one that stops; a single browser still needs no configuration.
-
-`use-browser profiles [browser]` lists your real profiles with the names your browser shows you, so `clone --profile` is discoverable:
-
-```
-$ use-browser profiles chrome
-chrome profiles (~/AppData/Local/Google/Chrome/User Data):
-  Default      "Personal"
-  Profile 1    "Work"
-copy one and drive it: use-browser clone chrome --profile "Default"
-```
-
-### Driving your real profile, and the permission dialog
-
-There are two routes to your everyday profile, and only one of them works unattended.
-
-**Flags don't work.** Chromium 136 ignores `--remote-debugging-port` whenever `--user-data-dir` is the browser's default one — it starts, and serves no endpoint. That is a deliberate fix for the "point a debug port at someone's live cookies" attack, and passing the same path explicitly doesn't dodge it. This restriction is the entire reason `clone` exists.
-
-**The `chrome://inspect` toggle works, at a price.** That is `use-browser connect`, and it drives the real profile with no copy at all. But on Chrome and Brave 144+ the "Allow remote debugging?" dialog is **per connection, not per session** — measured here, not assumed:
-
-```
-$ time use-browser js "location.host"     # after a previous Allow click
-error: browser websocket ws://127.0.0.1:63915/...: i/o timeout
-real    1m0.031s
-```
-
-One accepted click buys exactly one connection. use-browser opens one per invocation, so every invocation needs a human. A daemon would only move the click to once-per-daemon-lifetime, so it doesn't rescue unattended use either. Batch mode is the real lever: one invocation is one connection, so a whole task costs one click.
-
-So for anything unattended, `clone` is the mechanism — flag-based debugging on a copied profile never prompts. `use-browser doctor` tells you which mode you are in.
-
-### Keeping a clone current
-
-A copy drifts, so `clone` refreshes an existing clone before launching it, moving only changed files:
-
-```
-$ use-browser clone brave
-synced 6176 file(s), 884.0 MB, 45 skipped     # first pass
-$ use-browser clone brave
-synced 42 file(s), 32.9 MB, 43 skipped        # 1.2s
-```
-
-Modification times are preserved so the second pass has something to compare against. SQLite databases move as a group with their `-wal`/`-shm`/`-journal` sidecars, and sidecars the source has dropped are deleted from the copy — a fresh `Cookies` beside a stale journal reads as corrupt. Close the real browser first if you want fresh logins. On Windows a running Chromium holds `Network/Cookies` open without share-read — it cannot be copied at all, and that is the file the sessions live in:
-
-```
-$ cp ".../User Data/Default/Network/Cookies" /tmp/probe
-cp: cannot open ... for reading: Device or resource busy
-```
-
-So a sync with the browser open refreshes everything else and leaves the clone's logins at whatever they were the last time it was closed. On macOS and Linux the lock is advisory and this does not arise.
-
-`--close-source` is the way out, and the only one that needs no human:
-
-```
-$ use-browser clone brave --close-source
-closing brave so its cookies can be copied ...
-ok brave closed
-synced 250 file(s), 65.5 MB          # no files skipped: cookies came across
-ok brave pid=21180 profile="Default" (cloned, real logins)
-```
-
-It closes your browser with a close request rather than a kill — `taskkill` without `/F`, SIGTERM elsewhere — so Chromium flushes SQLite and writes its session file, then waits for the cookie file to actually become readable before copying. The clone is launched with `--restore-last-session`, so your tabs reopen in it and this reads as a handover rather than as losing the window you were in. Your real profile stays on disk and opens normally next time you launch the browser the usual way.
-
-browser-use does not do this; its daemon only launches a browser when none is running. It never needed to, because the cookie lock is advisory off Windows. `--no-sync` attaches unchanged, `--fresh` re-copies from scratch.
-
-If the clone itself is running, `clone` attaches to it rather than writing into a live profile — which is also how a second session joins the first session's cloned browser. That check uses Chromium's singleton lock (`lockfile` on Windows, `SingletonLock` on POSIX), because Chrome and Brave frequently never write `DevToolsActivePort`.
-
-### Disk
-
-```
-$ use-browser clean
-  profile-brave                    66.5 MB
-  profile-brave-clone            1525.3 MB   526 MB cache  [running]
-  total                          1591.8 MB
-keep the logins, drop 526 MB of cache: use-browser clean --cache
-```
-
-`use-browser clean <name>...` or `--all` deletes them, skipping any that a browser is using. A deleted clone is re-copied on the next `clone`. `BU_HOME=<dir>` relocates profiles and state; the default is the OS cache directory.
-
-Most of a clone's growth is cache it built for itself: caches are never copied from your real profile, so they only ever grow in the copy. `use-browser clean --cache` deletes just those directories and leaves everything that carries identity — cookies, logins, history — in place. The browser rebuilds them, more slowly the first time.
-
-The rest is drift, and `sync` handles it: every `clone` now deletes files your real profile has dropped, so a copy that is synced for months does not keep every file it has ever seen. Cache directories and use-browser's own bookkeeping are exempt, since neither has a source to be missing from.
-
-## Tabs and parallel agents
-
-`use-browser tabs` gives every tab a stable 8-character id, and that is how you should address them:
-
-```
-$ use-browser tabs
-1  0a3328d8 "Example Domain" https://example.com/
-2* 5f44a085 "Hacker News" https://news.ycombinator.com/
-```
-
-The leading positions are for humans. They come from `Target.getTargets`, which is neither tab-strip order nor stable — open a tab and an existing one can slide from `2` to `4` — so an agent that remembers a position ends up driving a different page. The id doesn't move, and `use-browser open` prints the id of the tab it just made.
-
-`--tab <id>` runs a single command against a tab without switching to it, reading and writing no state at all:
-
-```bash
-a=$(use-browser open https://example.com | awk '{print $2}')
-b=$(use-browser open https://example.org | awk '{print $2}')
-use-browser --tab "$a" snap
-use-browser --tab "$b" click 3
-```
-
-Snapshot indexes live in the page (`window.__bu`), so they're already per-tab: `[5]` in one tab has nothing to do with `[5]` in another.
-
-For several agents at once, `BU_SESSION=<name>` (or `--session <name>`) gives each its own state file, so "current tab" stops being a machine-wide singleton:
-
-```bash
-BU_SESSION=research use-browser open https://example.com
-BU_SESSION=checkout use-browser open https://shop.example.com
-```
-
-A session also scopes the pinned browser, the debug port and the launch profile, so `BU_SESSION=a use-browser launch chrome` and `BU_SESSION=b use-browser launch chrome` really are two browsers. Clones are the deliberate exception: they are shared by every session, one copy per browser rather than one per agent, because a clone runs to hundreds of megabytes. Two sessions cloning the same browser get one browser and a tab each. A named session never adopts a browser it didn't start — otherwise the port probe would hand session `b` the instance session `a` launched — so each one launches, clones, connects, or gets pointed at an endpoint with `BU_CDP_URL`. Agents that should share the user's logins can all point at the same `BU_CDP_URL` and keep to their own tab ids.
-
-When the remembered tab is gone, page commands fail with `current tab <id> is gone` instead of quietly adopting whatever tab happens to be first — that silent adoption is how one agent ends up typing into another's page. `tabs` and `tab` keep working, since they're how you recover.
+If the extension is running, use-browser uses it. Otherwise it falls back to the other three. Run `use-browser doctor` to see which one you are on. With more than one browser installed, pin one with `use-browser use brave`.
 
 ## Commands
 
 ```
-use-browser nav <url>                     navigate and wait for load
-use-browser snap [--max N]                indexed interactive elements
-use-browser find "<what>"                 Jev (TypeSafe) picks the element [--click | --fill <text>]
-                                          needs TYPESAFE_API_KEY; weak match -> candidates + snap hint
-use-browser run "<goal>"                  Jev closed loop for bounded tasks [--set <text>]... [--max-steps N]
-                                          stops at login/payment pages, done needs visible evidence
-use-browser text [--max N]                readable page text, capped at 4000 chars by default
-use-browser click <i | x,y>               click an element index or coordinates [--double --right]
-use-browser fill <i> <text>               focus element i and replace its value
-use-browser type <text>                   type into the focused element
-use-browser key <k>                       Enter, Tab, esc, down, ctrl+a, shift+Tab
+use-browser nav <url>                navigate and wait for load
+use-browser snap [--max N]           indexed interactive elements
+use-browser text [--max N]           readable page text
+use-browser click <i | x,y>          click an element or a point [--double --right]
+use-browser fill <i> <text>          replace an input's value
+use-browser type <text>              type into the focused element
+use-browser key <k>                  Enter, Tab, esc, ctrl+a, shift+Tab
 use-browser scroll [down|up|top|bottom|<px>]
-use-browser shot [path] [--full]          screenshot PNG, prints the file path
-use-browser tabs                          list tabs: "2* a1b2c3d4 "title" url"
-use-browser tab <id | n>                  switch current tab
-use-browser open [url]                    new tab, prints its id
-use-browser close [id]                    close the current tab, or the one named
-use-browser js <expr>                     run JavaScript in the page (js - reads stdin)
-use-browser cdp <Domain.method> [json]    raw DevTools call for anything not covered above
-use-browser use [browser]                 pin browser selection (`auto` clears it)
-use-browser ext install [browser]         drive your running browser via the extension (status | path | uninstall)
-use-browser apikey set <key>              store the TypeSafe API key for find (show | clear; - reads stdin)
-use-browser profiles [browser]            list real profiles, for clone
-use-browser clean [name|--all|--cache]    list or delete use-browser's own profiles (--cache keeps logins)
-use-browser stop [browser]                stop an owned launch/clone, keep its profile
-use-browser doctor [browser] | skill | help
+use-browser shot [path] [--full]     screenshot, prints the file path
+use-browser js <expr>                run JavaScript (js - reads stdin)
+use-browser cdp <Domain.method> [json]   raw DevTools call
 
---tab <id>                                run one command against a tab, writing no state
---session NAME                            scope this agent's state (env: BU_SESSION)
---browser NAME                            one-shot browser override (env: BU_BROWSER)
+use-browser tabs                     list tabs with stable ids
+use-browser tab <id>                 switch tab
+use-browser open [url]               new tab, prints its id
+use-browser close [id]               close a tab
+
+use-browser ext install [browser]    set up the extension (status | uninstall)
+use-browser clone | connect | launch [browser]
+use-browser stop [browser]           close a browser use-browser started
+use-browser use [browser]            pin a browser (auto clears it)
+use-browser doctor                   show what is connected and how
 ```
 
-Multi-step flows go through batch mode, which runs command lines from stdin over a single connection:
+Run several commands over one connection by piping them in:
 
 ```bash
 use-browser <<'EOF'
 fill 3 "user@example.com"
-fill 4 "hunter2"
 click 5
 snap
 EOF
 ```
 
-Execution stops at the first error with the failing line number and exit code 1.
+Snapshot indexes live in the page, so `click 17` works in a later command. If the page changed, the command fails and tells you to snap again.
 
-## Using it with an agent
+## Tabs and parallel agents
 
-The skill that teaches an agent the whole workflow lives in [SKILL.md](SKILL.md) and installs into Claude Code, Cursor, Codex, and about 70 other agents through the [skills.sh](https://skills.sh) ecosystem:
+Address tabs by the 8-character id from `use-browser tabs`, not by position, because positions change. `--tab <id>` runs one command against a tab without switching to it.
 
-```bash
-npx skills add hoangvu12/use-browser
-```
+Give each agent its own session with `BU_SESSION=<name>`. A session keeps its own current tab and pinned browser, so two agents don't type into each other's pages.
 
-The skill includes the binary install steps, so an agent that has the skill but not the binary can set itself up. Without npx, `use-browser skill` prints the same file and you can put it wherever your agent reads skills from:
+## Optional: Jev
 
-```bash
-mkdir -p .claude/skills/use-browser
-use-browser skill > .claude/skills/use-browser/SKILL.md
-```
+With a [TypeSafe](https://console.typesafe.ai) key (`use-browser apikey set <key>`), two more commands work. `find "accept cookies" --click` picks an element without pulling a snapshot into context. `run "<goal>"` completes a short click-and-type task in one call and stops at login or payment pages. Nothing calls TypeSafe unless you run one of these.
 
-## Design notes
+## How it works
 
-The output contract is the part I'd defend hardest: every command prints a single `ok` line or compact data, and errors go to stderr as `error: ...`. There are no banners and no spinners, because every byte a CLI prints ends up in an agent's context window and gets paid for on every request after that.
+Each command opens a connection, acts, and exits. There is no daemon. The only saved state is the current tab id, in a small JSON file.
 
-CDP itself turned out to be the easy part. It's JSON-RPC over one WebSocket, and the client in `ws.go` is about 180 lines of standard library code. The hard part was deciding what the snapshot should and shouldn't include; the current walker skips invisible elements, dedupes wrappers like a span inside a button, and flags when a click target is covered by an overlay, since a silent click on a cookie banner wastes an entire agent round trip.
+Without the extension, use-browser speaks the DevTools protocol over a WebSocket to the browser's debug port. With the extension, the browser starts use-browser as a native messaging host. use-browser then listens on a local port protected by a token. The extension passes each DevTools command to `chrome.debugger`, which needs no debug port. Claude in Chrome works the same way.
 
-One Windows note: PowerShell 5.1 mangles quotes in inline arguments and prefixes piped input with a BOM. The CLI strips the BOM, and anything with quotes in it should go through stdin (`js -` or batch mode) rather than inline arguments.
+Output is one `ok` line or compact data, and errors go to stderr as `error: ...`. Everything a CLI prints ends up in the agent's context, so it prints as little as possible.
+
+On Windows PowerShell, pass anything with quotes through stdin (`js -` or batch mode), because PowerShell 5.1 mangles inline quotes.
