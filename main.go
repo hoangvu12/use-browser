@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 const help = `use-browser ` + version + ` — tiny browser CLI for coding agents (CDP, zero deps)
 
